@@ -18,6 +18,7 @@ python kitchen_rush.py
 - Drag each finished item onto its matching customer ticket in any order. Ticket outlines are red for untouched, orange for partly complete, and green when complete.
 - Completed tickets are served automatically as soon as all requested items arrive.
 - Click `BIN` when an item has burned or a drink has been spoiled.
+- The game opens fullscreen. Two storage squares at the top can each hold one finished item temporarily.
 - Left/right arrow keys change the selected ticket; Space serves the selected ticket; Escape quits.
 
 The queue is intentionally manageable at the start, then adds customers over time. There is one of each appliance and no toppings yet.
