@@ -471,11 +471,11 @@ class KitchenRush:
         return stations
 
     def reward(self, order):
-        values = {"Burger": 11 + (4 if self.burger_upgrade else 0), "Chips": 9 + (4 if self.chips_upgrade else 0), "Water": 6, "Drink": 6, "Cola": 9, "Fanta": 11, "Lettuce": 1, "Tomato": 1, "Ketchup": 3, "Mustard": 3}
+        values = {"Burger": 11 + (4 if self.burger_upgrade else 0), "Chips": 9 + (4 if self.chips_upgrade else 0), "Water": 6, "Drink": 6, "Cola": 9, "Fanta": 11, "Lettuce": 3, "Tomato": 3, "Ketchup": 3, "Mustard": 3}
         return sum(values[item] for item in order.items)
 
     def delivered_reward(self, order):
-        values = {"Burger": 11 + (4 if self.burger_upgrade else 0), "Chips": 9 + (4 if self.chips_upgrade else 0), "Water": 6, "Drink": 6, "Cola": 9, "Fanta": 11, "Lettuce": 1, "Tomato": 1, "Ketchup": 3, "Mustard": 3}
+        values = {"Burger": 11 + (4 if self.burger_upgrade else 0), "Chips": 9 + (4 if self.chips_upgrade else 0), "Water": 6, "Drink": 6, "Cola": 9, "Fanta": 11, "Lettuce": 3, "Tomato": 3, "Ketchup": 3, "Mustard": 3}
         return sum(values.get(item, 0) for item in order.plated)
 
     def buy(self, kind):

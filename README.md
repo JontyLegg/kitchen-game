@@ -36,7 +36,7 @@ python kitchen_rush.py
 - Burger: 11c
 - Chips: 9c
 - Drink: 6c
-- Lettuce or tomato: 1c each
+- Lettuce or tomato: 3c each
 - An order that runs out of patience loses 20c, but still pays for items already delivered.
 - Chopping board, lettuce, tomato, and potato prep: 50c
 - Extra hob: 100c, then 200c, then 300c; maximum 4
