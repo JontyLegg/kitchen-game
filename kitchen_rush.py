@@ -388,7 +388,7 @@ class KitchenRush:
         if station.food:
             self.say("That station slot is occupied.")
             return False
-        kind = item
+        kind = item["kind"] if isinstance(item, dict) else item
         accepted = {"hob": "Burger", "fryer": "Chips", "drink": "Drink", "board": {"Potato", "Lettuce", "Tomato"}}
         if station.kind == "board":
             if not self.chop_unlocked or kind not in accepted["board"]:
@@ -401,6 +401,7 @@ class KitchenRush:
         station.fill = 0
         self.say(f"{kind} placed on the {station.kind}.")
         self.drag_item = None
+        self.held_item = None
         return True
 
     def drop_on_order(self, item, order):
@@ -793,8 +794,12 @@ class KitchenRush:
             self.dragging = None
         elif self.dragging == "held" and self.held_item:
             handled = False
+            for station in self.stations():
+                if station.rect.collidepoint(pos) and self.drop_on_station(self.held_item, station):
+                    handled = True
+                    break
             for i, rect in enumerate(self.storage_rects()):
-                if rect.collidepoint(pos) and self.storage[i] is None:
+                if not handled and rect.collidepoint(pos) and self.storage[i] is None:
                     self.storage[i] = self.held_item
                     self.held_item = None
                     handled = True
