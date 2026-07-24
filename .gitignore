@@ -1,3 +1,4 @@
 .git-project/
 __pycache__/
 *.pyc
+saves/*.json

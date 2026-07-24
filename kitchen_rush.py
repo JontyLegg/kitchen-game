@@ -62,6 +62,7 @@ IMAGES = {
     "lettuce": image("chopped lettuce.png"),
     "tomato_raw": image("unchopped tomato.png"),
     "tomato": image("chopped tomato.png"),
+    "fire": image("fire for burnt food.png"),
 }
 
 FONT = pygame.font.SysFont("arial", 19)
@@ -147,6 +148,8 @@ class KitchenRush:
         self.held_item = None
         self.drag_item = None
         self.dragging = None
+        self.press_pos = None
+        self.auto_click_pending = False
         self.storage = [None, None]
         self.filling = []
         self.chopping = False
@@ -199,6 +202,19 @@ class KitchenRush:
         patience = (58 + len(items) * 14) * 0.85
         self.orders.append(Order(self.next_order, items, patience, patience))
         self.next_order += 1
+        self.sort_orders()
+
+    def order_work(self, order):
+        durations = {"Burger": 12.2, "Chips": 11.6, "Drink": 5.0, "Lettuce": 4.3, "Tomato": 4.3}
+        return sum(durations[item] for item in order.items if item not in order.plated)
+
+    def sort_orders(self):
+        current = self.selected() if self.orders else None
+        self.orders.sort(key=lambda order: (self.order_work(order), order.number))
+        if current in self.orders:
+            self.selected_order = self.orders.index(current)
+        else:
+            self.selected_order = min(self.selected_order, max(0, len(self.orders) - 1))
 
     def stations(self):
         result = self.hobs + self.fryers + self.drinks
@@ -438,6 +454,7 @@ class KitchenRush:
             self.complete_order(order)
         else:
             self.say(f"Added to order #{order.number}.")
+        self.sort_orders()
         return True
 
     def complete_order(self, order):
@@ -449,6 +466,38 @@ class KitchenRush:
         self.selected_order = min(self.selected_order, max(0, len(self.orders) - 1))
         if len(self.orders) < 3:
             self.add_order()
+
+    def auto_route(self, item):
+        """Send a clicked item to the next valid station or waiting order."""
+        kind = item["kind"] if isinstance(item, dict) else item
+        if isinstance(item, str):
+            if kind == "Burger":
+                for station in self.hobs:
+                    if not station.food:
+                        return self.drop_on_station(item, station)
+            elif kind == "Drink":
+                for station in self.drinks:
+                    if not station.food:
+                        return self.drop_on_station(item, station)
+            elif kind in {"Potato", "Lettuce", "Tomato"}:
+                if not self.board.food and self.chop_unlocked:
+                    return self.drop_on_station(item, self.board)
+            elif kind == "Bun":
+                for order in self.orders:
+                    if "Burger" in order.items and not order.has_bun:
+                        return self.drop_on_order({"kind": "Bun", "burnt": False}, order)
+        else:
+            if kind == "Chips" and not item.get("cooked", False):
+                for station in self.fryers:
+                    if not station.food:
+                        return self.drop_on_station(item, station)
+            elif kind in {"Burger", "Chips", "Drink", "Chopped Lettuce", "Chopped Tomato"}:
+                for order in self.orders:
+                    needed = {"Chopped Lettuce": "Lettuce", "Chopped Tomato": "Tomato"}.get(kind, kind)
+                    if needed in order.items and needed not in order.plated and (kind != "Burger" or order.has_bun):
+                        return self.drop_on_order(item, order)
+        self.say(f"There is no valid next place for the {kind.lower()}.")
+        return False
 
     def bin_item(self):
         if self.held_item:
@@ -619,17 +668,23 @@ class KitchenRush:
                 draw_image(SCREEN, "pan", pygame.Rect(station.rect.x + 26, station.rect.y + 5, 78, 70))
                 if food:
                     draw_image(SCREEN, "cooked_burger" if food.stage == "ready" else "raw_burger", pygame.Rect(station.rect.x + 42, station.rect.y + 25, 48, 40))
+                    if food.burning:
+                        draw_image(SCREEN, "fire", station.rect.inflate(-12, -12))
                     if food.stage == "ready" and not food.flipped:
                         pygame.draw.rect(SCREEN, ORANGE, self.flip_rect(station), border_radius=5)
                         draw_text(SCREEN, "FLIP", self.flip_rect(station).center, SMALL, BG, True)
             elif station.kind == "fryer":
                 if food:
                     draw_image(SCREEN, "cooked_chips" if food.stage == "ready" else "raw_chips", pygame.Rect(station.rect.x + 16, station.rect.y + 16, 98, 55))
+                    if food.burning:
+                        draw_image(SCREEN, "fire", station.rect.inflate(-12, -12))
                 else:
                     draw_text(SCREEN, "DROP CHIPS", station.rect.center, SMALL, MUTED, True)
             else:
                 if food:
                     draw_image(SCREEN, "filled_drink" if food.stage == "ready" else "empty_drink", pygame.Rect(station.rect.x + 42, station.rect.y + 4, 46, 62))
+                    if food.burning:
+                        draw_image(SCREEN, "fire", station.rect.inflate(-12, -12))
                     pygame.draw.rect(SCREEN, BLUE if station in self.filling else (64, 74, 92), self.fill_rect(station), border_radius=5)
                     draw_text(SCREEN, "FILL", self.fill_rect(station).center, SMALL, CREAM, True)
                 else:
@@ -699,6 +754,7 @@ class KitchenRush:
         return int(pos[0] * 1180 / DISPLAY.get_width()), int(pos[1] * 760 / DISPLAY.get_height())
 
     def click(self, pos):
+        self.auto_click_pending = False
         if self.save_dialog == "load":
             files = sorted(name for name in os.listdir(SAVE_DIR) if name.endswith(".json"))
             for i, filename in enumerate(files[:4]):
@@ -736,6 +792,7 @@ class KitchenRush:
                     self.held_item = self.storage[i]
                     self.storage[i] = None
                     self.dragging = "held"
+                    self.auto_click_pending = True
                 return
         for i, order in enumerate(self.orders):
             if self.ticket_rect(i).collidepoint(pos):
@@ -746,6 +803,7 @@ class KitchenRush:
             if rect.collidepoint(pos):
                 self.drag_item = kind
                 self.dragging = "source"
+                self.auto_click_pending = True
                 return
         if pygame.Rect(1060, 665, 80, 58).collidepoint(pos):
             self.bin_item()
@@ -768,16 +826,26 @@ class KitchenRush:
                     else:
                         self.say("Wait until the burger is ready before flipping it.")
                 elif station.kind == "drink" and self.fill_rect(station).collidepoint(pos) and station.food.stage != "ready":
-                    if station not in self.filling:
-                        self.filling.append(station)
-                    self.say("Filling... release between 90% and 100%.")
+                    self.filling = [drink for drink in self.drinks if drink.food and not drink.food.burning and drink.food.stage != "ready"]
+                    self.say("Filling all drink slots... release between 90% and 100%.")
                 else:
-                    self.take_station(station)
+                    if self.take_station(station):
+                        self.auto_click_pending = True
                 return
 
     def release(self, pos):
+        is_click = self.press_pos is not None and pygame.Vector2(pos).distance_to(self.press_pos) < 10
         if self.dragging == "source" and self.drag_item:
             kind = self.drag_item
+            if is_click and self.auto_click_pending:
+                self.auto_route(kind)
+                self.drag_item = None
+                self.dragging = None
+                self.auto_click_pending = False
+                self.press_pos = None
+                self.chopping = False
+                self.filling.clear()
+                return
             handled = False
             for station in self.stations():
                 if station.rect.collidepoint(pos) and self.drop_on_station(kind, station):
@@ -793,6 +861,14 @@ class KitchenRush:
             self.drag_item = None
             self.dragging = None
         elif self.dragging == "held" and self.held_item:
+            if is_click and self.auto_click_pending:
+                self.auto_route(self.held_item)
+                self.dragging = "held" if self.held_item else None
+                self.auto_click_pending = False
+                self.press_pos = None
+                self.chopping = False
+                self.filling.clear()
+                return
             handled = False
             for station in self.stations():
                 if station.rect.collidepoint(pos) and self.drop_on_station(self.held_item, station):
@@ -817,6 +893,8 @@ class KitchenRush:
             self.dragging = "held" if self.held_item else None
         self.chopping = False
         self.filling.clear()
+        self.auto_click_pending = False
+        self.press_pos = None
         for station in self.drinks:
             if station.food and station.food.stage == "filling" and not station.food.burning:
                 if 0.9 <= station.fill <= 1:
@@ -855,7 +933,8 @@ class KitchenRush:
                     elif not self.paused and event.key == pygame.K_LEFT:
                         self.selected_order = max(0, self.selected_order - 1)
                 elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                    self.click(self.to_game(event.pos))
+                    self.press_pos = self.to_game(event.pos)
+                    self.click(self.press_pos)
                 elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
                     if not self.paused:
                         self.release(self.to_game(event.pos))

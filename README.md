@@ -11,14 +11,17 @@ python kitchen_rush.py
 ## Current gameplay
 
 - Drag raw burgers, buns, and empty cups from the ingredient bar to stations.
+- A short click auto-routes an item: raw ingredients go to their station, buns go to the next burger order, and finished items go to the next matching order. Dragging still gives manual control.
 - Burgers must be flipped only when the first side is ready. The second side has its own cooking timer and burn window.
 - Potatoes become uncooked chips on the chopping board, then go into the fryer.
 - Hold `FILL` on a drink slot. Release between 90% and 100%; above 100% overflows and must be dragged to the BIN.
+- With multiple drink slots, activating one fill control fills all occupied unfinished drink slots together.
 - Press `P` or click the top-right pause button to freeze the kitchen. Upgrades and save/load are available only while paused.
 - Save a run by choosing `SAVE RUN`, typing a name, and pressing Enter. Use `OPEN SAVE` later to load a previous run.
 - Drag finished items to the matching order. Extra or incorrect items are rejected.
 - A bun must arrive before a burger. Completed orders serve automatically.
 - Drag a finished or burnt item into either storage slot or the BIN.
+- Waiting tickets are ordered by their remaining preparation work so shorter orders appear first.
 - Hold `CHOP` on the chopping board to prepare potatoes, lettuce, or tomatoes.
 
 ## Money and upgrades
