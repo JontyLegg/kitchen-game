@@ -74,6 +74,8 @@ class Order:
     patience: float = 58.0
     max_patience: float = 58.0
     flash: float = 0.0
+    plated: list = field(default_factory=list)
+    has_bun: bool = False
 
     def label(self):
         return " + ".join(self.items)
@@ -114,8 +116,6 @@ class KitchenRush:
         self.drag_item = None
         self.held_item = None
         self.filling = False
-        self.plate_items = []
-        self.plate_has_bun = False
         self.plate_rect = pygame.Rect(38, 440, 245, 122)
         self.game_time = 0.0
         self.stations = [
@@ -152,7 +152,7 @@ class KitchenRush:
         if station.food.stage != "ready":
             self.say("That item is still cooking.")
             return False
-        if station.food.kind == "Drink" and not (0.74 <= station.fill <= 0.96):
+        if station.food.kind == "Drink" and station.fill < 0.9:
             self.say("Fill the drink to the target line before taking it off.")
             return False
         item = {"kind": station.food.kind, "fill": station.fill}
@@ -180,21 +180,24 @@ class KitchenRush:
         self.drag_item = None
 
     def drop_on_plate(self, item):
+        order = self.selected()
+        if not order:
+            return
         if item == "Bun":
-            if self.plate_has_bun:
+            if order.has_bun:
                 self.say("This plate already has a bun.")
             else:
-                self.plate_has_bun = True
+                order.has_bun = True
                 self.say("Bun placed. Now drag the burger onto the plate.")
         elif isinstance(item, dict):
             kind = item["kind"]
-            if kind == "Burger" and not self.plate_has_bun:
+            if kind == "Burger" and not order.has_bun:
                 self.say("Every burger needs a bun first — drag a bun onto the plate.")
                 return
-            if kind in self.plate_items:
+            if kind in order.plated:
                 self.say(f"This plate already has {kind.lower()}.")
             else:
-                self.plate_items.append(kind)
+                order.plated.append(kind)
                 self.say(f"{kind} plated. Add the rest of the selected order.")
         self.held_item = None
         self.drag_item = None
@@ -255,14 +258,14 @@ class KitchenRush:
             self.say("Nothing burnt needs binning.")
 
     def serve_order(self, order):
-        if not set(order.items).issubset(set(self.plate_items)):
+        if not set(order.items).issubset(set(order.plated)):
             self.say("Plate every item on the selected ticket before serving.")
             return
-        if "Burger" in order.items and not self.plate_has_bun:
+        if "Burger" in order.items and not order.has_bun:
             self.say("A burger cannot leave without a bun.")
             return
-        self.plate_items.clear()
-        self.plate_has_bun = False
+        order.plated.clear()
+        order.has_bun = False
         bonus = int(order.patience * 2)
         self.score += 100 + bonus
         self.served += 1
@@ -327,9 +330,10 @@ class KitchenRush:
         drink = self.stations[2]
         if drink.food and not drink.food.burning:
             if drink.food.stage == "filling" and drink.fill >= 1:
-                drink.food.burning = True
-                drink.food.burn_flash = 3
-                self.say("OVERFILLED! Bin that drink and try again.", 3)
+                drink.fill = 1
+                drink.food.stage = "ready"
+                self.filling = False
+                self.say("Drink filled! Pick it up and drag it onto its order.")
 
         for station in self.stations:
             if station.food and station.food.stage == "warning":
@@ -363,11 +367,9 @@ class KitchenRush:
             rect = pygame.Rect(x, 440, width, 122)
             selected = index == self.selected_order
             needed = set(order.items)
-            supplied = set(self.plate_items)
-            complete = needed.issubset(supplied) and ("Burger" not in needed or self.plate_has_bun)
-            partial = bool(needed & supplied) or ("Burger" in needed and self.plate_has_bun)
-            if index != self.selected_order:
-                complete = partial = False
+            supplied = set(order.plated)
+            complete = needed.issubset(supplied) and ("Burger" not in needed or order.has_bun)
+            partial = bool(needed & supplied) or ("Burger" in needed and order.has_bun)
             outline = GREEN if complete else ORANGE if partial else RED
             pygame.draw.rect(SCREEN, (67, 75, 95) if selected else PANEL, rect, border_radius=10)
             pygame.draw.rect(SCREEN, outline, rect, 4 if selected else 3, border_radius=10)
@@ -383,16 +385,19 @@ class KitchenRush:
 
     def draw_plate(self):
         rect = self.plate_rect
+        order = self.selected()
+        plated = order.plated if order else []
+        has_bun = order.has_bun if order else False
         pygame.draw.rect(SCREEN, PANEL, rect, border_radius=10)
         pygame.draw.rect(SCREEN, ORANGE if self.held_item else (77, 87, 108), rect, 2, border_radius=10)
         draw_text(SCREEN, "PLATE UP", (rect.x + 14, rect.y + 10), BIG, CREAM)
-        if self.plate_has_bun and "Burger" in self.plate_items:
+        if has_bun and "Burger" in plated:
             draw_image(SCREEN, "burger", pygame.Rect(rect.x + 12, rect.y + 35, 88, 74))
-        elif self.plate_has_bun:
+        elif has_bun:
             draw_image(SCREEN, "bun", pygame.Rect(rect.x + 12, rect.y + 35, 88, 74))
         else:
             draw_text(SCREEN, "DRAG BUN FIRST", (rect.x + 60, rect.y + 70), SMALL, RED, True)
-        draw_text(SCREEN, "+ " + ", ".join(item for item in self.plate_items if item != "Burger") if self.plate_items else "", (rect.x + 108, rect.y + 58), SMALL, CREAM)
+        draw_text(SCREEN, "+ " + ", ".join(item for item in plated if item != "Burger") if plated else "", (rect.x + 108, rect.y + 58), SMALL, CREAM)
         draw_text(SCREEN, "drop items here", (rect.x + 108, rect.y + 86), SMALL, ORANGE)
 
     def draw_station(self, station):
@@ -546,17 +551,16 @@ class KitchenRush:
                         self.dragging = None
                     self.filling = False
                     drink = self.stations[2]
-                    if drink.food and drink.food.stage == "filling" and not drink.food.burning and 0.74 <= drink.fill <= 0.96:
+                    if drink.food and drink.food.stage == "filling" and not drink.food.burning and drink.fill >= 0.9:
+                        drink.fill = 1
                         drink.food.stage = "ready"
-                        self.say("Drink ready. Serve it while the ticket is still happy.")
+                        self.say("Drink filled! Pick it up and drag it onto its order.")
 
             if self.filling and pygame.mouse.get_pressed()[0]:
                 station = self.stations[2]
                 if station.food and not station.food.burning:
                     station.food.stage = "filling"
-                    station.fill = clamp(station.fill + dt * 0.7, 0, 1.15)
-                    if station.fill >= 1:
-                        self.say("OVERFILLING! Release the button!", 1)
+                    station.fill = clamp(station.fill + dt * 0.35, 0, 1)
             self.update(dt)
             self.draw()
         pygame.quit()
