@@ -1,4 +1,3 @@
-import math
 import os
 import random
 import sys
@@ -18,22 +17,23 @@ IMAGE_DIR = os.path.join(os.path.dirname(__file__), "images")
 
 def image(name):
     surface = pygame.image.load(os.path.join(IMAGE_DIR, name)).convert_alpha()
-    # Remove white/checkered backdrops only when connected to an outer edge, so
-    # pale highlights inside the food remain intact.
     width, height = surface.get_size()
-    def background_pixel(x, y):
+
+    def is_background(x, y):
         r, g, b, a = surface.get_at((x, y))
         return a and min(r, g, b) > 210 and max(r, g, b) - min(r, g, b) < 18
 
+    # Remove checkerboard/white pixels only when they are connected to the edge.
+    # This keeps pale highlights inside food while cleaning the supplied assets.
     queue = deque()
     seen = set()
     for x in range(width):
-        queue.extend([(x, 0), (x, height - 1)])
+        queue.extend(((x, 0), (x, height - 1)))
     for y in range(height):
-        queue.extend([(0, y), (width - 1, y)])
+        queue.extend(((0, y), (width - 1, y)))
     while queue:
         x, y = queue.popleft()
-        if (x, y) in seen or not (0 <= x < width and 0 <= y < height) or not background_pixel(x, y):
+        if (x, y) in seen or not (0 <= x < width and 0 <= y < height) or not is_background(x, y):
             continue
         seen.add((x, y))
         r, g, b, _ = surface.get_at((x, y))
@@ -53,13 +53,18 @@ IMAGES = {
     "bun": image("empty burger bun.png"),
     "burger": image("burger buns with patty.png"),
     "pan": image("pan.png"),
+    "board": image("chopping board.png"),
+    "potato": image("potato.png"),
+    "lettuce_raw": image("unchopped lettuce.png"),
+    "lettuce": image("chopped lettuce.png"),
+    "tomato_raw": image("unchopped tomato.png"),
+    "tomato": image("chopped tomato.png"),
 }
 
-FONT = pygame.font.SysFont("arial", 20)
-SMALL = pygame.font.SysFont("arial", 16)
-TITLE = pygame.font.SysFont("arial", 34, bold=True)
-BIG = pygame.font.SysFont("arial", 25, bold=True)
-
+FONT = pygame.font.SysFont("arial", 19)
+SMALL = pygame.font.SysFont("arial", 15)
+TITLE = pygame.font.SysFont("arial", 32, bold=True)
+BIG = pygame.font.SysFont("arial", 22, bold=True)
 BG = (27, 31, 41)
 PANEL = (42, 48, 62)
 PANEL_DARK = (33, 38, 50)
@@ -73,18 +78,13 @@ YELLOW = (248, 210, 72)
 
 
 def draw_text(surface, text, pos, font=FONT, color=CREAM, center=False):
-    image = font.render(text, True, color)
-    rect = image.get_rect()
-    rect.center = pos if center else rect.center
-    if not center:
-        rect.topleft = pos
-    surface.blit(image, rect)
+    rendered = font.render(text, True, color)
+    rect = rendered.get_rect(center=pos) if center else rendered.get_rect(topleft=pos)
+    surface.blit(rendered, rect)
 
 
-def draw_image(surface, key, rect, padding=0):
-    target = rect.inflate(-padding * 2, -padding * 2)
-    source = IMAGES[key]
-    scaled = pygame.transform.smoothscale(source, target.size)
+def draw_image(surface, key, rect):
+    scaled = pygame.transform.smoothscale(IMAGES[key], rect.size)
     surface.blit(scaled, scaled.get_rect(center=rect.center))
 
 
@@ -96,9 +96,8 @@ def clamp(value, low, high):
 class Order:
     number: int
     items: list
-    patience: float = 58.0
-    max_patience: float = 58.0
-    flash: float = 0.0
+    patience: float
+    max_patience: float
     plated: list = field(default_factory=list)
     has_bun: bool = False
 
@@ -118,9 +117,9 @@ class Food:
 
 @dataclass
 class Station:
-    name: str
-    rect: pygame.Rect
     kind: str
+    index: int
+    rect: pygame.Rect = field(default_factory=pygame.Rect)
     food: Food | None = None
     fill: float = 0.0
 
@@ -128,37 +127,41 @@ class Station:
 class KitchenRush:
     def __init__(self):
         self.running = True
-        self.score = 0
+        self.money = 0
         self.served = 0
         self.missed = 0
-        self.next_order_number = 1
-        self.orders: list[Order] = []
-        self.message = "Take an order, then use the stations to prepare it."
+        self.next_order = 1
+        self.orders = []
+        self.selected_order = 0
+        self.message = "Drag ingredients to stations, then drag finished items onto their matching tickets."
         self.message_timer = 6.0
         self.spawn_timer = 0.0
-        self.selected_order = 0
-        self.dragging = None
-        self.drag_item = None
-        self.held_item = None
-        self.filling = False
-        self.storage = [None, None]
         self.game_time = 0.0
-        self.stations = [
-            Station("HOB", pygame.Rect(38, 170, 330, 245), "hob"),
-            Station("DEEP FAT FRYER", pygame.Rect(390, 170, 330, 245), "fryer"),
-            Station("DRINK FILLER", pygame.Rect(742, 170, 400, 245), "drink"),
-        ]
+        self.held_item = None
+        self.drag_item = None
+        self.dragging = None
+        self.storage = [None, None]
+        self.filling = []
+        self.chopping = False
+        self.chop_unlocked = False
+        self.hobs = [Station("hob", 0)]
+        self.fryers = [Station("fryer", 0)]
+        self.drinks = [Station("drink", 0)]
+        self.board = Station("board", 0)
+        self.refresh_layout()
         self.add_order()
         self.add_order()
 
-    def add_order(self):
-        # Weighted orders keep the first playthrough learnable but increasingly busy.
-        recipes = [["Burger"], ["Chips"], ["Drink"], ["Burger", "Chips"], ["Burger", "Drink"], ["Chips", "Drink"]]
-        items = random.choice(recipes)
-        self.orders.append(Order(self.next_order_number, items))
-        self.next_order_number += 1
+    def refresh_layout(self):
+        groups = [(self.hobs, 20), (self.fryers, 310), (self.drinks, 600)]
+        for stations, x in groups:
+            for station in stations:
+                col = station.index % 2
+                row = station.index // 2
+                station.rect = pygame.Rect(x + col * 138, 125 + row * 112, 130, 102)
+        self.board.rect = pygame.Rect(890, 125, 270, 214)
 
-    def say(self, message, duration=3.0):
+    def say(self, message, duration=3):
         self.message = message
         self.message_timer = duration
 
@@ -168,388 +171,478 @@ class KitchenRush:
         self.selected_order = clamp(self.selected_order, 0, len(self.orders) - 1)
         return self.orders[self.selected_order]
 
-    def take_from_station(self, station):
+    def add_order(self):
+        recipes = [["Burger"], ["Chips"], ["Drink"], ["Burger", "Chips"], ["Burger", "Drink"], ["Chips", "Drink"]]
+        if self.chop_unlocked:
+            recipes += [["Burger", "Lettuce"], ["Burger", "Tomato"], ["Burger", "Lettuce", "Tomato"], ["Burger", "Lettuce", "Drink"]]
+        items = random.choice(recipes)
+        patience = 58 + len(items) * 14
+        self.orders.append(Order(self.next_order, items, patience, patience))
+        self.next_order += 1
+
+    def stations(self):
+        result = self.hobs + self.fryers + self.drinks
+        if self.chop_unlocked:
+            result.append(self.board)
+        return result
+
+    def food_image(self, kind, cooked=False):
+        return {
+            "Burger": "cooked_burger" if cooked else "raw_burger",
+            "Chips": "cooked_chips" if cooked else "raw_chips",
+            "Drink": "filled_drink" if cooked else "empty_drink",
+            "Bun": "bun",
+            "Potato": "potato",
+            "Lettuce": "lettuce" if cooked else "lettuce_raw",
+            "Tomato": "tomato" if cooked else "tomato_raw",
+            "Chopped Lettuce": "lettuce",
+            "Chopped Tomato": "tomato",
+        }[kind]
+
+    def source_rects(self):
+        sources = [("Burger", "raw_burger"), ("Bun", "bun"), ("Drink", "empty_drink")]
+        if self.chop_unlocked:
+            sources += [("Potato", "potato"), ("Lettuce", "lettuce_raw"), ("Tomato", "tomato_raw")]
+        return [(pygame.Rect(20 + i * 112, 665, 102, 58), kind, key) for i, (kind, key) in enumerate(sources)]
+
+    def storage_rects(self):
+        return [pygame.Rect(430, 12, 76, 68), pygame.Rect(515, 12, 76, 68)]
+
+    def ticket_rect(self, index):
+        return pygame.Rect(20 + (index % 4) * 290, 365 + (index // 4) * 92, 278, 82)
+
+    def fill_rect(self, station):
+        return pygame.Rect(station.rect.x + 8, station.rect.bottom - 30, station.rect.width - 16, 22)
+
+    def chop_rect(self):
+        return pygame.Rect(self.board.rect.x + 72, self.board.rect.bottom - 32, 126, 24)
+
+    def all_upgrade_rects(self):
+        return {
+            "chop": pygame.Rect(692, 665, 145, 30),
+            "hob": pygame.Rect(692, 700, 145, 30),
+            "fryer": pygame.Rect(845, 665, 145, 30),
+            "drink": pygame.Rect(845, 700, 145, 30),
+        }
+
+    def reward(self, order):
+        values = {"Burger": 15, "Chips": 13, "Drink": 10, "Lettuce": 5, "Tomato": 5}
+        return sum(values[item] for item in order.items)
+
+    def delivered_reward(self, order):
+        values = {"Burger": 15, "Chips": 13, "Drink": 10, "Lettuce": 5, "Tomato": 5}
+        return sum(values[item] for item in order.plated)
+
+    def buy(self, kind):
+        counts = {"hob": len(self.hobs), "fryer": len(self.fryers), "drink": len(self.drinks)}
+        if kind == "chop":
+            cost = 150
+            if self.chop_unlocked:
+                self.say("The chopping board is already unlocked.")
+                return
+        else:
+            base = {"hob": 100, "fryer": 100, "drink": 125}[kind]
+            cost = base * counts[kind]
+            if counts[kind] >= 4:
+                self.say(f"You already have the maximum number of {kind} slots.")
+                return
+        if self.money < cost:
+            self.say(f"You need {cost}c for that upgrade. You have {self.money}c.")
+            return
+        self.money -= cost
+        if kind == "chop":
+            self.chop_unlocked = True
+            self.say("Chopping board unlocked: lettuce, tomato, and potatoes are now available!")
+        elif kind == "hob":
+            self.hobs.append(Station("hob", len(self.hobs)))
+            self.say("Another hob installed.")
+        elif kind == "fryer":
+            self.fryers.append(Station("fryer", len(self.fryers)))
+            self.say("Another fryer installed.")
+        else:
+            self.drinks.append(Station("drink", len(self.drinks)))
+            self.say("Another drink slot installed.")
+        self.refresh_layout()
+
+    def take_station(self, station):
         if not station.food:
             return False
         if station.food.burning:
-            self.say("That item is burnt. Use BIN before starting again.")
+            item = {"kind": station.food.kind, "burnt": True}
+        elif station.kind == "drink" and station.food.stage != "ready":
+            self.say("Finish filling the drink between 90% and 100% first.")
             return False
-        if station.food.stage != "ready":
-            self.say("That item is still cooking.")
+        elif station.food.stage != "ready":
+            self.say("That item is still being prepared.")
             return False
-        if station.food.kind == "Drink" and station.fill < 0.9:
-            self.say("Fill the drink to the target line before taking it off.")
-            return False
-        item = {"kind": station.food.kind, "fill": station.fill}
+        else:
+            item = {"kind": station.food.kind, "burnt": False}
         station.food = None
         station.fill = 0
         self.held_item = item
-        self.say(f"{item['kind']} picked up. Drag it onto the matching order.")
+        self.dragging = "held"
+        self.say("Item picked up. Drag it to an order, storage, or BIN.")
         return True
 
-    def drop_on_station(self, kind, station):
+    def drop_on_station(self, item, station):
         if station.food:
-            self.say(f"The {station.name.lower()} is already occupied.")
-            return
-        if kind == "Burger" and station.kind == "hob":
-            station.food = Food("Burger")
-        elif kind == "Chips" and station.kind == "fryer":
-            station.food = Food("Chips")
-        elif kind == "Drink" and station.kind == "drink":
-            station.food = Food("Drink")
-            station.fill = 0
-        else:
-            self.say("That ingredient belongs at a different station.")
-            return
-        self.say(f"{kind} dropped onto the {station.name.lower()}.")
+            self.say("That station slot is occupied.")
+            return False
+        kind = item
+        accepted = {"hob": "Burger", "fryer": "Chips", "drink": "Drink", "board": {"Potato", "Lettuce", "Tomato"}}
+        if station.kind == "board":
+            if not self.chop_unlocked or kind not in accepted["board"]:
+                self.say("That ingredient cannot go on the chopping board.")
+                return False
+        elif kind != accepted[station.kind]:
+            self.say(f"That item does not belong in this {station.kind} slot.")
+            return False
+        station.food = Food(kind)
+        station.fill = 0
+        self.say(f"{kind} placed on the {station.kind}.")
         self.drag_item = None
+        return True
 
-    def drop_on_plate(self, item):
-        order = self.selected()
-        if not order:
-            return
-        if item == "Bun":
+    def drop_on_order(self, item, order):
+        if item.get("burnt"):
+            self.say("Burnt food can only go in the BIN.")
+            return False
+        kind = item["kind"]
+        if kind == "Bun":
             if "Burger" not in order.items:
-                self.say("This order does not need a bun.")
-                return
+                self.say("That order does not need a bun.")
+                return False
             if order.has_bun:
-                self.say("This plate already has a bun.")
-            else:
-                order.has_bun = True
-                self.say("Bun added. Now drag the burger onto this order.")
-        elif isinstance(item, dict):
-            kind = item["kind"]
-            if kind not in order.items:
-                self.say(f"This order does not need {kind.lower()}.")
-                return
-            if kind == "Burger" and not order.has_bun:
-                self.say("Every burger needs a bun first — drag a bun onto this order.")
-                return
-            if kind in order.plated:
-                self.say(f"This plate already has {kind.lower()}.")
-            else:
-                order.plated.append(kind)
-                self.say(f"{kind} added to the order. Add the remaining items.")
-        self.maybe_auto_serve(order)
+                self.say("That order already has a bun.")
+                return False
+            order.has_bun = True
+        else:
+            delivered_kind = {"Chopped Lettuce": "Lettuce", "Chopped Tomato": "Tomato"}.get(kind, kind)
+            if delivered_kind not in order.items:
+                self.say(f"Order #{order.number} does not need {kind.lower()}.")
+                return False
+            if delivered_kind == "Burger" and not order.has_bun:
+                self.say("Add the bun before adding the burger.")
+                return False
+            if delivered_kind in order.plated:
+                self.say(f"Order #{order.number} already has {delivered_kind.lower()}.")
+                return False
+            order.plated.append(delivered_kind)
         self.held_item = None
-        self.drag_item = None
-
-    def maybe_auto_serve(self, order):
+        self.dragging = None
         if set(order.items).issubset(set(order.plated)) and ("Burger" not in order.items or order.has_bun):
-            self.serve_order(order)
+            self.complete_order(order)
+        else:
+            self.say(f"Added to order #{order.number}.")
+        return True
 
-    def action(self, action):
-        order = self.selected()
-        if action == "new_order":
-            self.add_order()
-            self.say("New customer! Select their ticket before cooking.")
-            return
-        if not order:
-            self.say("There are no waiting customers.")
-            return
-        if action == "start_burger":
-            station = self.stations[0]
-            if station.food:
-                self.say("The hob is already occupied.")
-            else:
-                station.food = Food("Burger", "raw")
-                self.say(f"Patty started for order #{order.number}.")
-        elif action == "flip":
-            station = self.stations[0]
-            if not station.food:
-                self.say("Put a patty on the hob first.")
-            elif station.food.stage != "ready":
-                self.say("Wait until the patty is ready before flipping it.")
-            elif station.food.flipped:
-                self.say("That burger is fully cooked — take it off before it burns.")
-            else:
-                station.food.flipped = True
-                station.food.stage = "raw"
-                station.food.progress = 0
-                station.food.burn_flash = 0
-                self.say("Patty flipped. The second side is cooking now!")
-        elif action == "start_chips":
-            station = self.stations[1]
-            if station.food:
-                self.say("The fryer is already occupied.")
-            else:
-                station.food = Food("Chips", "raw")
-                self.say("Chips dropped into the fryer.")
-        elif action == "start_drink":
-            station = self.stations[2]
-            if station.food:
-                self.say("The drink filler is already occupied.")
-            else:
-                station.food = Food("Drink", "raw")
-                station.fill = 0
-                self.say("Empty cup placed. Use FILL DRINK when ready.")
-        elif action == "serve":
-            self.serve_order(order)
-        elif action == "bin":
-            for station in self.stations:
-                if station.food and station.food.burning:
-                    station.food = None
-                    station.fill = 0
-                    self.say("Burnt item binned. Start that item again.")
-                    return
-            self.say("Nothing burnt needs binning.")
-
-    def serve_order(self, order):
-        if not set(order.items).issubset(set(order.plated)):
-            self.say("Plate every item on the selected ticket before serving.")
-            return
-        if "Burger" in order.items and not order.has_bun:
-            self.say("A burger cannot leave without a bun.")
-            return
-        order.plated.clear()
-        order.has_bun = False
-        bonus = int(order.patience * 2)
-        self.score += 100 + bonus
+    def complete_order(self, order):
+        reward = self.reward(order)
+        self.money += reward
         self.served += 1
+        self.say(f"Order #{order.number} served automatically! +{reward}c")
         self.orders.remove(order)
         self.selected_order = min(self.selected_order, max(0, len(self.orders) - 1))
-        self.say(f"Order #{order.number} served! +{100 + bonus} points.")
         if len(self.orders) < 3:
             self.add_order()
+
+    def bin_item(self):
+        if self.held_item:
+            self.held_item = None
+            self.dragging = None
+            self.say("Item binned.")
+        else:
+            self.say("Drag an item onto the BIN.")
 
     def update(self, dt):
         self.game_time += dt
         self.message_timer = max(0, self.message_timer - dt)
-        if len(self.orders) < 4:
-            self.spawn_timer += dt
-            if self.spawn_timer > 16:
-                self.spawn_timer = 0
-                self.add_order()
-                self.say("Another customer has arrived.")
-
+        self.spawn_timer += dt
+        if self.spawn_timer > 16 and len(self.orders) < 4:
+            self.spawn_timer = 0
+            self.add_order()
         for order in self.orders[:]:
             order.patience -= dt
             if order.patience <= 0:
+                partial = self.delivered_reward(order)
+                self.money += partial - 10
                 self.orders.remove(order)
                 self.missed += 1
-                self.score = max(0, self.score - 50)
-                self.selected_order = max(0, self.selected_order - 1)
-                self.say(f"Order #{order.number} walked out. Keep moving!")
+                self.selected_order = min(self.selected_order, max(0, len(self.orders) - 1))
+                self.say(f"Order #{order.number} walked out: +{partial}c delivered, -10c penalty.")
 
-        hob = self.stations[0]
-        if hob.food and not hob.food.burning:
-            if hob.food.stage == "raw":
-                speed = 0.22 if not hob.food.flipped else 0.18
-                hob.food.progress += dt * speed
-                if hob.food.progress >= 1:
-                    hob.food.progress = 1
-                    hob.food.stage = "ready"
-                    hob.food.burn_flash = 3
-                    if hob.food.flipped:
-                        self.say("Burger cooked! Take it off before it burns.", 3)
-                    else:
-                        self.say("Patty ready — flip it now!", 3)
-            elif hob.food.stage == "ready":
-                hob.food.burn_flash -= dt
-                if hob.food.burn_flash <= 0:
-                    hob.food.burning = True
-                    self.say("Burger burned! Bin it and start again.")
+        for station in self.drinks:
+            if station in self.filling and station.food and not station.food.burning:
+                station.fill += dt * 0.175
+                station.food.stage = "filling"
+                if station.fill > 1:
+                    station.food.burning = True
+                    if station in self.filling:
+                        self.filling.remove(station)
+                    self.say("That drink overflowed. Drag it into the BIN.")
+        if self.chopping and self.board.food:
+            self.board.food.progress += dt / 4.3
+            self.board.food.stage = "chopping"
+            if self.board.food.progress >= 1:
+                result = {"Potato": "Chips", "Lettuce": "Chopped Lettuce", "Tomato": "Chopped Tomato"}[self.board.food.kind]
+                self.board.food.kind = result
+                self.board.food.stage = "ready"
+                self.chopping = False
+                self.say(f"{result} chopped and ready to drag.")
 
-        fryer = self.stations[1]
-        if fryer.food and not fryer.food.burning:
-            fryer.food.progress += dt * 0.12
-            if fryer.food.progress >= 1 and fryer.food.stage == "raw":
-                fryer.food.progress = 1
-                fryer.food.stage = "ready"
-                fryer.food.burn_flash = 3
-                self.say("Chips are ready — take them out before they burn!", 3)
-            if fryer.food.stage == "ready" and fryer.food.burn_flash > 0:
-                fryer.food.burn_flash -= dt
-            elif fryer.food.stage == "ready" and fryer.food.burn_flash <= 0:
-                fryer.food.stage = "burned"
-                fryer.food.burning = True
-                self.say("Chips burned! Bin them and start again.")
-
-        drink = self.stations[2]
-        if drink.food and not drink.food.burning:
-            if drink.food.stage == "filling" and drink.fill >= 1:
-                drink.fill = 1
-                drink.food.stage = "ready"
-                self.filling = False
-                self.say("Drink filled! Pick it up and drag it onto its order.")
-
-        for station in self.stations:
-            if station.food and station.food.stage == "warning":
-                station.food.burn_flash = max(0, station.food.burn_flash)
+    def update_progress(self, dt):
+        for station in self.hobs:
+            if not station.food or station.food.burning:
+                continue
+            food = station.food
+            if food.stage == "raw":
+                food.progress += dt * (0.22 if not food.flipped else 0.18)
+                if food.progress >= 1:
+                    food.progress = 1
+                    food.stage = "ready"
+                    food.burn_flash = 3
+                    self.say("Burger ready — flip it now!" if not food.flipped else "Burger cooked — take it off now!", 3)
+            elif food.stage == "ready":
+                food.burn_flash -= dt
+                if food.burn_flash <= 0:
+                    food.burning = True
+                    self.say("Burger burned. Drag it into the BIN.")
+        for station in self.fryers:
+            if not station.food or station.food.burning:
+                continue
+            food = station.food
+            if food.stage == "raw":
+                food.progress += dt * 0.12
+                if food.progress >= 1:
+                    food.progress = 1
+                    food.stage = "ready"
+                    food.burn_flash = 3
+                    self.say("Chips ready — take them out now!", 3)
+            elif food.stage == "ready":
+                food.burn_flash -= dt
+                if food.burn_flash <= 0:
+                    food.burning = True
+                    self.say("Chips burned. Drag them into the BIN.")
 
     def draw(self):
         SCREEN.fill(BG)
-        draw_text(SCREEN, "KITCHEN RUSH", (38, 22), TITLE, CREAM)
-        draw_text(SCREEN, "You are the whole kitchen. Read the tickets, multitask, and serve before patience runs out.", (40, 65), SMALL, MUTED)
-        draw_text(SCREEN, f"SCORE  {self.score}", (890, 24), BIG, YELLOW)
-        draw_text(SCREEN, f"SERVED {self.served}   WALKED OUT {self.missed}", (890, 58), SMALL, MUTED)
+        draw_text(SCREEN, "KITCHEN RUSH", (20, 16), TITLE)
+        draw_text(SCREEN, "STARTER KITCHEN", (22, 54), SMALL, MUTED)
+        draw_text(SCREEN, f"MONEY  {self.money}c", (750, 20), BIG, YELLOW)
+        draw_text(SCREEN, f"SERVED {self.served}   WALKED OUT {self.missed}", (750, 52), SMALL, MUTED)
         self.draw_storage()
+        self.draw_group(self.hobs, "HOBS", 20)
+        self.draw_group(self.fryers, "DEEP FAT FRYERS", 310)
+        self.draw_group(self.drinks, "DRINK FILLERS", 600)
+        self.draw_board()
         self.draw_orders()
-        for station in self.stations:
-            self.draw_station(station)
         self.draw_controls()
         if self.drag_item or self.held_item:
-            mouse = self.to_game_pos(pygame.mouse.get_pos())
-            if self.drag_item:
-                key = {"Burger": "raw_burger", "Chips": "raw_chips", "Drink": "empty_drink", "Bun": "bun"}[self.drag_item]
-            else:
-                key = {"Burger": "cooked_burger", "Chips": "cooked_chips", "Drink": "filled_drink"}[self.held_item["kind"]]
-            draw_image(SCREEN, key, pygame.Rect(mouse[0] - 42, mouse[1] - 42, 84, 84))
+            mouse = self.to_game(pygame.mouse.get_pos())
+            kind = self.drag_item or self.held_item["kind"]
+            draw_image(SCREEN, self.food_image(kind, bool(self.held_item)), pygame.Rect(mouse[0] - 35, mouse[1] - 35, 70, 70))
         scaled = pygame.transform.smoothscale(SCREEN, DISPLAY.get_size())
         DISPLAY.blit(scaled, (0, 0))
         pygame.display.flip()
 
-    def to_game_pos(self, pos):
-        return (int(pos[0] * SCREEN.get_width() / DISPLAY.get_width()), int(pos[1] * SCREEN.get_height() / DISPLAY.get_height()))
-
-    def storage_rects(self):
-        return [pygame.Rect(455, 12, 82, 70), pygame.Rect(548, 12, 82, 70)]
-
     def draw_storage(self):
-        draw_text(SCREEN, "STORAGE", (455, 2), SMALL, MUTED)
-        for index, rect in enumerate(self.storage_rects()):
+        draw_text(SCREEN, "STORAGE", (430, 2), SMALL, MUTED)
+        for i, rect in enumerate(self.storage_rects()):
             pygame.draw.rect(SCREEN, PANEL, rect, border_radius=8)
-            pygame.draw.rect(SCREEN, ORANGE if self.storage[index] else (77, 87, 108), rect, 2, border_radius=8)
-            if self.storage[index]:
-                key = {"Burger": "cooked_burger", "Chips": "cooked_chips", "Drink": "filled_drink"}[self.storage[index]["kind"]]
-                draw_image(SCREEN, key, rect.inflate(-12, -12))
+            pygame.draw.rect(SCREEN, ORANGE if self.storage[i] else (77, 87, 108), rect, 2, border_radius=8)
+            if self.storage[i]:
+                draw_image(SCREEN, self.food_image(self.storage[i]["kind"], True), rect.inflate(-12, -12))
             else:
-                draw_text(SCREEN, str(index + 1), rect.center, SMALL, MUTED, True)
+                draw_text(SCREEN, str(i + 1), rect.center, SMALL, MUTED, True)
+
+    def draw_group(self, stations, title, x):
+        rect = pygame.Rect(x, 92, 280, 242)
+        pygame.draw.rect(SCREEN, PANEL_DARK, rect, border_radius=10)
+        draw_text(SCREEN, title, (x + 10, 98), BIG, CREAM)
+        for station in stations:
+            pygame.draw.rect(SCREEN, PANEL, station.rect, border_radius=8)
+            pygame.draw.rect(SCREEN, ORANGE if station.food else (77, 87, 108), station.rect, 2, border_radius=8)
+            food = station.food
+            if station.kind == "hob":
+                draw_image(SCREEN, "pan", pygame.Rect(station.rect.x + 26, station.rect.y + 5, 78, 70))
+                if food:
+                    draw_image(SCREEN, "cooked_burger" if food.stage == "ready" else "raw_burger", pygame.Rect(station.rect.x + 42, station.rect.y + 25, 48, 40))
+            elif station.kind == "fryer":
+                if food:
+                    draw_image(SCREEN, "cooked_chips" if food.stage == "ready" else "raw_chips", pygame.Rect(station.rect.x + 16, station.rect.y + 16, 98, 55))
+                else:
+                    draw_text(SCREEN, "DROP CHIPS", station.rect.center, SMALL, MUTED, True)
+            else:
+                if food:
+                    draw_image(SCREEN, "filled_drink" if food.stage == "ready" else "empty_drink", pygame.Rect(station.rect.x + 42, station.rect.y + 4, 46, 62))
+                    pygame.draw.rect(SCREEN, BLUE if station in self.filling else (64, 74, 92), self.fill_rect(station), border_radius=5)
+                    draw_text(SCREEN, "FILL", self.fill_rect(station).center, SMALL, CREAM, True)
+                else:
+                    draw_text(SCREEN, "DROP CUP", station.rect.center, SMALL, MUTED, True)
+            if food and station.kind != "drink":
+                self.draw_bar(food, station.rect)
+            elif food and station.kind == "drink":
+                draw_text(SCREEN, f"{int(station.fill * 100)}%", (station.rect.x + 8, station.rect.y + 76), SMALL, CREAM)
+
+    def draw_board(self):
+        rect = self.board.rect
+        pygame.draw.rect(SCREEN, PANEL_DARK, rect, border_radius=10)
+        draw_text(SCREEN, "CHOPPING BOARD", (rect.x + 10, rect.y + 6), BIG, CREAM)
+        if not self.chop_unlocked:
+            draw_text(SCREEN, "LOCKED — BUY UPGRADE", rect.center, FONT, MUTED, True)
+            return
+        draw_image(SCREEN, "board", pygame.Rect(rect.x + 18, rect.y + 32, rect.width - 36, 120))
+        if self.board.food:
+            draw_image(SCREEN, self.food_image(self.board.food.kind), pygame.Rect(rect.x + 95, rect.y + 50, 80, 65))
+            self.draw_bar(self.board.food, rect)
+            pygame.draw.rect(SCREEN, BLUE if self.chopping else (64, 74, 92), self.chop_rect(), border_radius=5)
+            draw_text(SCREEN, "HOLD CHOP", self.chop_rect().center, SMALL, CREAM, True)
+        else:
+            draw_text(SCREEN, "DROP POTATO / LETTUCE / TOMATO", rect.center, SMALL, MUTED, True)
+
+    def draw_bar(self, food, rect):
+        bar = pygame.Rect(rect.x + 8, rect.bottom - 20, rect.width - 16, 10)
+        pygame.draw.rect(SCREEN, PANEL_DARK, bar, border_radius=5)
+        pygame.draw.rect(SCREEN, RED if food.burning else (YELLOW if food.stage == "ready" else ORANGE), (bar.x, bar.y, int(bar.width * min(1, food.progress)), bar.height), border_radius=5)
+        if food.burning:
+            draw_text(SCREEN, "BURNING — DRAG TO BIN", (rect.centerx, rect.y + 5), SMALL, RED, True)
+        elif food.stage == "ready":
+            draw_text(SCREEN, f"READY {food.burn_flash:.1f}s", (rect.centerx, rect.y + 5), SMALL, YELLOW, True)
 
     def draw_orders(self):
-        draw_text(SCREEN, "CUSTOMER TICKETS", (38, 110), BIG, CREAM)
-        x = 295
-        for index, order in enumerate(self.orders):
-            width = 245
-            rect = pygame.Rect(x, 440, width, 122)
-            selected = index == self.selected_order
+        draw_text(SCREEN, "CUSTOMER ORDERS — DROP ITEMS DIRECTLY ONTO THE RIGHT ORDER", (20, 344), BIG, CREAM)
+        for i, order in enumerate(self.orders):
+            rect = self.ticket_rect(i)
             needed = set(order.items)
             supplied = set(order.plated)
             complete = needed.issubset(supplied) and ("Burger" not in needed or order.has_bun)
             partial = bool(needed & supplied) or ("Burger" in needed and order.has_bun)
             outline = GREEN if complete else ORANGE if partial else RED
-            pygame.draw.rect(SCREEN, (67, 75, 95) if selected else PANEL, rect, border_radius=10)
-            pygame.draw.rect(SCREEN, outline, rect, 4 if selected else 3, border_radius=10)
-            draw_text(SCREEN, f"#{order.number}", (x + 14, 451), BIG, ORANGE)
-            draw_text(SCREEN, order.label(), (x + 55, 454), FONT, CREAM)
-            delivered = (["Burger"] if "Burger" in order.plated else (["Bun"] if order.has_bun else []))
-            delivered += [item for item in order.plated if item != "Burger"]
-            for item_index, item in enumerate(delivered[:4]):
-                item_key = {"Bun": "bun", "Burger": "burger", "Chips": "cooked_chips", "Drink": "filled_drink"}[item]
-                draw_image(SCREEN, item_key, pygame.Rect(x + 14 + item_index * 42, 476, 34, 30))
-            if delivered:
-                draw_text(SCREEN, "delivered", (x + 185, 486), SMALL, GREEN)
-            draw_text(SCREEN, "patience", (x + 14, 508), SMALL, MUTED)
-            pygame.draw.rect(SCREEN, PANEL_DARK, (x + 14, 532, width - 28, 10), border_radius=6)
-            patience_color = GREEN if order.patience > 25 else RED
-            pygame.draw.rect(SCREEN, patience_color, (x + 14, 532, int((width - 28) * order.patience / order.max_patience), 10), border_radius=6)
-            x += width + 14
-            if x + width > SCREEN.get_width():
-                break
-
-    def draw_station(self, station):
-        pygame.draw.rect(SCREEN, PANEL, station.rect, border_radius=14)
-        pygame.draw.rect(SCREEN, (77, 87, 108), station.rect, 2, border_radius=14)
-        draw_text(SCREEN, station.name, (station.rect.x + 18, station.rect.y + 16), BIG, CREAM)
-        inner = station.rect.inflate(-36, -70)
-        pygame.draw.rect(SCREEN, PANEL_DARK, inner, border_radius=10)
-        food = station.food
-        if station.kind == "hob":
-            draw_image(SCREEN, "pan", pygame.Rect(inner.centerx - 75, inner.y + 2, 150, 135))
-            if food:
-                draw_image(SCREEN, "cooked_burger" if food.stage in ("ready", "warning") else "raw_burger", pygame.Rect(inner.centerx - 55, inner.y + 28, 110, 90))
-                self.draw_food_status(food, inner, "FLIP" if not food.flipped else "COOKING")
-            else:
-                draw_text(SCREEN, "DROP RAW PATTY", inner.center, SMALL, MUTED, True)
-        elif station.kind == "fryer":
-            pygame.draw.rect(SCREEN, (151, 98, 43), inner.inflate(-55, -28), border_radius=9)
-            if food:
-                draw_image(SCREEN, "cooked_chips" if food.stage in ("ready", "warning") else "raw_chips", pygame.Rect(inner.centerx - 90, inner.y + 20, 180, 105))
-                self.draw_food_status(food, inner, "FRYING")
-            else:
-                draw_text(SCREEN, "DROP RAW CHIPS", inner.center, SMALL, MUTED, True)
-        else:
-            pygame.draw.rect(SCREEN, (75, 121, 147), inner.inflate(-110, -20), border_radius=12)
-            if food:
-                draw_image(SCREEN, "filled_drink" if food.stage == "ready" else "empty_drink", pygame.Rect(inner.centerx - 52, inner.y + 5, 104, 130))
-                draw_text(SCREEN, f"FILL {int(station.fill * 100)}%", (station.rect.x + 24, station.rect.bottom - 48), SMALL, CREAM)
-            else:
-                draw_text(SCREEN, "DROP EMPTY CUP", inner.center, SMALL, MUTED, True)
-
-    def draw_food_status(self, food, area, label):
-        bar = pygame.Rect(area.x + 18, area.bottom - 34, area.width - 36, 14)
-        pygame.draw.rect(SCREEN, (24, 27, 35), bar, border_radius=7)
-        fill_color = RED if food.burning else (YELLOW if food.progress > 0.8 else ORANGE)
-        pygame.draw.rect(SCREEN, fill_color, (bar.x, bar.y, int(bar.width * food.progress), bar.height), border_radius=7)
-        text_color = RED if food.burning else (YELLOW if food.stage == "warning" else CREAM)
-        status = "BURNING — BIN IT" if food.burning else (f"READY — {food.burn_flash:.1f}s" if food.stage in ("warning", "ready") and food.burn_flash > 0 else label)
-        draw_text(SCREEN, status, (area.centerx, area.y + 15), SMALL, text_color, True)
-        if food.stage == "warning" or (food.stage == "ready" and food.burn_flash > 0):
-            pygame.draw.rect(SCREEN, RED, area, 3, border_radius=10)
+            pygame.draw.rect(SCREEN, PANEL, rect, border_radius=8)
+            pygame.draw.rect(SCREEN, outline, rect, 3, border_radius=8)
+            draw_text(SCREEN, f"#{order.number}  {order.label()}", (rect.x + 9, rect.y + 7), SMALL, CREAM)
+            delivered = (["Burger"] if "Burger" in order.plated else (["Bun"] if order.has_bun else [])) + [x for x in order.plated if x != "Burger"]
+            for n, item in enumerate(delivered[:4]):
+                draw_image(SCREEN, self.food_image(item, True), pygame.Rect(rect.x + 10 + n * 38, rect.y + 28, 30, 25))
+            pygame.draw.rect(SCREEN, PANEL_DARK, (rect.x + 10, rect.bottom - 13, rect.width - 20, 7), border_radius=4)
+            pygame.draw.rect(SCREEN, GREEN if order.patience > 35 else RED, (rect.x + 10, rect.bottom - 13, int((rect.width - 20) * order.patience / order.max_patience), 7), border_radius=4)
 
     def draw_controls(self):
-        pygame.draw.rect(SCREEN, PANEL_DARK, (38, 590, 1104, 138), border_radius=12)
-        draw_text(SCREEN, self.message if self.message_timer > 0 else "Drag ingredients to cookers. Tap a cooker to flip or pick up food.", (58, 602), FONT, CREAM)
-        sources = [("BURGER", "Burger"), ("CHIPS", "Chips"), ("DRINK", "Drink"), ("BUN", "Bun")]
-        for index, (label, kind) in enumerate(sources):
-            rect = pygame.Rect(58 + index * 135, 650, 118, 48)
-            pygame.draw.rect(SCREEN, (64, 74, 92), rect, border_radius=7)
-            pygame.draw.rect(SCREEN, ORANGE if self.drag_item == kind else (113, 124, 145), rect, 2 if self.drag_item == kind else 1, border_radius=7)
-            image_key = {"Burger": "raw_burger", "Chips": "raw_chips", "Drink": "empty_drink", "Bun": "bun"}[kind]
-            draw_image(SCREEN, image_key, pygame.Rect(rect.x + 4, rect.y + 4, 40, 40))
-            draw_text(SCREEN, f"DRAG {label}", rect.center, SMALL, CREAM, True)
-        fill_rect = pygame.Rect(608, 650, 130, 48)
-        pygame.draw.rect(SCREEN, BLUE if self.filling else (64, 74, 92), fill_rect, border_radius=7)
-        draw_text(SCREEN, "FILL DRINK", fill_rect.center, SMALL, CREAM, True)
-        bin_rect = pygame.Rect(1042, 650, 65, 48)
-        pygame.draw.rect(SCREEN, RED, bin_rect, border_radius=7)
-        draw_text(SCREEN, "BIN", bin_rect.center, SMALL, CREAM, True)
+        pygame.draw.rect(SCREEN, PANEL_DARK, (20, 570, 1140, 180), border_radius=10)
+        draw_text(SCREEN, self.message if self.message_timer > 0 else "Drag items between stations, storage, BIN, and matching orders.", (35, 580), SMALL, CREAM)
+        for rect, kind, key in self.source_rects():
+            pygame.draw.rect(SCREEN, PANEL, rect, border_radius=6)
+            draw_image(SCREEN, key, pygame.Rect(rect.x + 3, rect.y + 4, 42, 48))
+            draw_text(SCREEN, kind.upper(), (rect.x + 48, rect.y + 21), SMALL, CREAM)
+        pygame.draw.rect(SCREEN, RED, pygame.Rect(1060, 665, 80, 58), border_radius=7)
+        draw_text(SCREEN, "BIN", (1100, 694), BIG, CREAM, True)
+        buttons = self.all_upgrade_rects()
+        labels = {"chop": f"CHOP BOARD 150c", "hob": f"HOB +1 {len(self.hobs) * 100}c", "fryer": f"FRYER +1 {len(self.fryers) * 100}c", "drink": f"DRINK +1 {len(self.drinks) * 125}c"}
+        for key, rect in buttons.items():
+            pygame.draw.rect(SCREEN, BLUE if (key == "chop" and self.chop_unlocked) else (64, 74, 92), rect, border_radius=5)
+            draw_text(SCREEN, labels[key], rect.center, SMALL, CREAM, True)
 
-    def source_rects(self):
-        return [(pygame.Rect(58 + index * 135, 650, 118, 48), kind) for index, kind in enumerate(("Burger", "Chips", "Drink", "Bun"))]
+    def to_game(self, pos):
+        return int(pos[0] * 1180 / DISPLAY.get_width()), int(pos[1] * 760 / DISPLAY.get_height())
 
     def click(self, pos):
-        for index, rect in enumerate(self.storage_rects()):
+        if self.held_item:
+            self.dragging = "held"
+        for i, rect in enumerate(self.storage_rects()):
             if rect.collidepoint(pos):
-                if self.storage[index] and not self.held_item:
-                    self.held_item = self.storage[index]
-                    self.storage[index] = None
+                if self.storage[i] and not self.held_item:
+                    self.held_item = self.storage[i]
+                    self.storage[i] = None
                     self.dragging = "held"
-                    self.say("Stored item picked up. Drag it onto its order.")
                 return
-        for index, order in enumerate(self.orders):
-            rect = pygame.Rect(295 + index * 259, 440, 245, 122)
-            if rect.collidepoint(pos):
-                self.selected_order = index
-                self.say(f"Order #{order.number} selected: {order.label()}.")
+        for i, order in enumerate(self.orders):
+            if self.ticket_rect(i).collidepoint(pos):
+                self.selected_order = i
+                self.say(f"Order #{order.number} selected.")
                 return
-        for rect, kind in self.source_rects():
+        for rect, kind, _ in self.source_rects():
             if rect.collidepoint(pos):
                 self.drag_item = kind
                 self.dragging = "source"
-                self.say(f"Drag the {kind.lower()} to its station or matching order.")
                 return
-        for station in self.stations:
-            if station.rect.collidepoint(pos) and station.food:
-                if station.kind == "hob" and not station.food.flipped and not station.food.burning:
-                    self.action("flip")
-                elif station.kind == "drink" and station.food.stage != "ready" and not station.food.burning:
-                    self.say("Use the FILL DRINK button, then release at the target level.")
-                else:
-                    if self.take_from_station(station):
-                        self.dragging = "held"
+        for key, rect in self.all_upgrade_rects().items():
+            if rect.collidepoint(pos):
+                self.buy(key)
                 return
-        if pygame.Rect(608, 650, 130, 48).collidepoint(pos):
-            drink = self.stations[2]
-            if drink.food and not drink.food.burning and drink.food.stage != "ready":
-                drink.food.stage = "filling"
-                self.filling = True
-                self.say("Filling... release near 80%.")
-            else:
-                self.say("Drag an empty cup to the drink filler first.")
+        if pygame.Rect(1060, 665, 80, 58).collidepoint(pos):
+            self.bin_item()
             return
-        if pygame.Rect(1042, 650, 65, 48).collidepoint(pos):
-            self.action("bin")
+        if self.chop_unlocked and self.chop_rect().collidepoint(pos) and self.board.food and self.board.food.stage != "ready":
+            self.chopping = True
+            self.say("Chopping... keep holding.")
+            return
+        for station in self.stations():
+            if station.rect.collidepoint(pos) and station.food:
+                if station.food.burning:
+                    self.take_station(station)
+                elif station.kind == "hob" and not station.food.flipped:
+                    if station.food.stage == "ready":
+                        station.food.flipped = True
+                        station.food.stage = "raw"
+                        station.food.progress = 0
+                        station.food.burn_flash = 0
+                        self.say("Burger flipped. Cook the second side.")
+                    else:
+                        self.say("Wait until the burger is ready before flipping it.")
+                elif station.kind == "drink" and self.fill_rect(station).collidepoint(pos):
+                    if station not in self.filling:
+                        self.filling.append(station)
+                    self.say("Filling... release between 90% and 100%.")
+                else:
+                    self.take_station(station)
+                return
+
+    def release(self, pos):
+        if self.dragging == "source" and self.drag_item:
+            kind = self.drag_item
+            handled = False
+            for station in self.stations():
+                if station.rect.collidepoint(pos) and self.drop_on_station(kind, station):
+                    handled = True
+                    break
+            if not handled and kind == "Bun":
+                for i, order in enumerate(self.orders):
+                    if self.ticket_rect(i).collidepoint(pos):
+                        self.selected_order = i
+                        self.drop_on_order({"kind": "Bun", "burnt": False}, order)
+                        handled = True
+                        break
+            self.drag_item = None
+            self.dragging = None
+        elif self.dragging == "held" and self.held_item:
+            handled = False
+            for i, rect in enumerate(self.storage_rects()):
+                if rect.collidepoint(pos) and self.storage[i] is None:
+                    self.storage[i] = self.held_item
+                    self.held_item = None
+                    handled = True
+                    self.say("Item stored safely.")
+                    break
+            if not handled and pygame.Rect(1060, 665, 80, 58).collidepoint(pos):
+                self.bin_item()
+                handled = True
+            if not handled:
+                for i, order in enumerate(self.orders):
+                    if self.ticket_rect(i).collidepoint(pos):
+                        self.selected_order = i
+                        handled = self.drop_on_order(self.held_item, order)
+                        break
+            self.dragging = "held" if self.held_item else None
+        self.chopping = False
+        self.filling.clear()
+        for station in self.drinks:
+            if station.food and station.food.stage == "filling" and not station.food.burning:
+                if 0.9 <= station.fill <= 1:
+                    station.fill = 1
+                    station.food.stage = "ready"
+                    self.say("Drink filled and ready to drag.")
+                elif station.fill < 0.9:
+                    self.say("That drink needs at least 90% fill.")
 
     def run(self):
         while self.running:
@@ -557,60 +650,17 @@ class KitchenRush:
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     self.running = False
-                elif event.type == pygame.KEYDOWN:
-                    if event.key == pygame.K_ESCAPE:
-                        self.running = False
-                    elif event.key == pygame.K_RIGHT:
-                        self.selected_order = min(len(self.orders) - 1, self.selected_order + 1)
-                    elif event.key == pygame.K_LEFT:
-                        self.selected_order = max(0, self.selected_order - 1)
+                elif event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                    self.running = False
+                elif event.type == pygame.KEYDOWN and event.key == pygame.K_RIGHT:
+                    self.selected_order = min(len(self.orders) - 1, self.selected_order + 1)
+                elif event.type == pygame.KEYDOWN and event.key == pygame.K_LEFT:
+                    self.selected_order = max(0, self.selected_order - 1)
                 elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                    self.click(self.to_game_pos(event.pos))
+                    self.click(self.to_game(event.pos))
                 elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
-                    pos = self.to_game_pos(event.pos)
-                    if self.dragging == "source" and self.drag_item:
-                        for station in self.stations:
-                            if station.rect.collidepoint(pos):
-                                self.drop_on_station(self.drag_item, station)
-                                break
-                        else:
-                            for index, order in enumerate(self.orders):
-                                ticket = pygame.Rect(295 + index * 259, 440, 245, 122)
-                                if ticket.collidepoint(pos):
-                                    self.selected_order = index
-                                    self.drop_on_plate(self.drag_item)
-                                    break
-                        self.dragging = None
-                        self.drag_item = None
-                    elif self.dragging == "held" and self.held_item:
-                        stored = False
-                        for index, rect in enumerate(self.storage_rects()):
-                            if rect.collidepoint(pos) and self.storage[index] is None:
-                                self.storage[index] = self.held_item
-                                self.held_item = None
-                                stored = True
-                                self.say("Item stored safely.")
-                                break
-                        if not stored:
-                            for index, order in enumerate(self.orders):
-                                ticket = pygame.Rect(295 + index * 259, 440, 245, 122)
-                                if ticket.collidepoint(pos):
-                                    self.selected_order = index
-                                    self.drop_on_plate(self.held_item)
-                                    break
-                        self.dragging = None
-                    self.filling = False
-                    drink = self.stations[2]
-                    if drink.food and drink.food.stage == "filling" and not drink.food.burning and drink.fill >= 0.9:
-                        drink.fill = 1
-                        drink.food.stage = "ready"
-                        self.say("Drink filled! Pick it up and drag it onto its order.")
-
-            if self.filling and pygame.mouse.get_pressed()[0]:
-                station = self.stations[2]
-                if station.food and not station.food.burning:
-                    station.food.stage = "filling"
-                    station.fill = clamp(station.fill + dt * 0.175, 0, 1)
+                    self.release(self.to_game(event.pos))
+            self.update_progress(dt)
             self.update(dt)
             self.draw()
         pygame.quit()
