@@ -698,14 +698,14 @@ class KitchenRush:
                     self.say(f"EXTRA HARD ORDER missed: -{loss}c (15%).")
                     continue
                 partial = self.delivered_reward(order)
-                self.money += partial - 10
+                self.money += partial
                 loss = math.ceil(max(0, self.money) * 0.2)
                 self.money -= loss
                 self.patience_factor = min(1.0, self.patience_factor * 1.03)
                 self.orders.remove(order)
                 self.missed += 1
                 self.selected_order = min(self.selected_order, max(0, len(self.orders) - 1))
-                self.say(f"Order #{order.number} walked out: +{partial}c, -10c and -{loss}c (20%).")
+                self.say(f"Order #{order.number} walked out: +{partial}c delivered, -{loss}c (20%).")
 
         for station in self.drinks:
             if station in self.filling and station.food and not station.food.burning:

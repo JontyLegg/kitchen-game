@@ -37,7 +37,7 @@ python kitchen_rush.py
 - Chips: 9c
 - Drink: 6c
 - Lettuce or tomato: 3c each
-- An order that runs out of patience loses 20c, but still pays for items already delivered.
+- An order that runs out of patience still pays for items already delivered, then removes 20% of your current money, rounded up.
 - Chopping board, lettuce, tomato, and potato prep: 50c
 - Extra hob: 100c, then 200c, then 300c; maximum 4
 - Extra fryer: same pricing and maximum
