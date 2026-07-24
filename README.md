@@ -26,7 +26,7 @@ python kitchen_rush.py
 - Drink: 10c
 - Lettuce or tomato: 5c each
 - An order that runs out of patience loses 10c, but still pays for items already delivered.
-- Chopping board, lettuce, tomato, and potato prep: 150c
+- Chopping board, lettuce, tomato, and potato prep: 50c
 - Extra hob: 100c, then 200c, then 300c; maximum 4
 - Extra fryer: same pricing and maximum
 - Extra drink slot: 125c, then 250c, then 375c; maximum 4

@@ -172,10 +172,23 @@ class KitchenRush:
         return self.orders[self.selected_order]
 
     def add_order(self):
-        recipes = [["Burger"], ["Chips"], ["Drink"], ["Burger", "Chips"], ["Burger", "Drink"], ["Chips", "Drink"]]
-        if self.chop_unlocked:
-            recipes += [["Burger", "Lettuce"], ["Burger", "Tomato"], ["Burger", "Lettuce", "Tomato"], ["Burger", "Lettuce", "Drink"]]
-        items = random.choice(recipes)
+        if not self.chop_unlocked:
+            recipes = [["Burger"], ["Drink"], ["Burger", "Drink"]]
+            items = random.choice(recipes)
+        else:
+            # Every burger gets a random topping combination after the first upgrade.
+            burger_toppings = [[], ["Lettuce"], ["Tomato"], ["Lettuce", "Tomato"]]
+            burger = ["Burger"] + random.choice(burger_toppings)
+            recipes = [
+                burger,
+                burger + ["Drink"],
+                burger + ["Chips"],
+                burger + ["Chips", "Drink"],
+                ["Chips"],
+                ["Chips", "Drink"],
+                ["Drink"],
+            ]
+            items = random.choice(recipes)
         patience = 58 + len(items) * 14
         self.orders.append(Order(self.next_order, items, patience, patience))
         self.next_order += 1
@@ -236,7 +249,7 @@ class KitchenRush:
     def buy(self, kind):
         counts = {"hob": len(self.hobs), "fryer": len(self.fryers), "drink": len(self.drinks)}
         if kind == "chop":
-            cost = 150
+            cost = 50
             if self.chop_unlocked:
                 self.say("The chopping board is already unlocked.")
                 return
@@ -537,7 +550,7 @@ class KitchenRush:
         pygame.draw.rect(SCREEN, RED, pygame.Rect(1060, 665, 80, 58), border_radius=7)
         draw_text(SCREEN, "BIN", (1100, 694), BIG, CREAM, True)
         buttons = self.all_upgrade_rects()
-        labels = {"chop": f"CHOP BOARD 150c", "hob": f"HOB +1 {len(self.hobs) * 100}c", "fryer": f"FRYER +1 {len(self.fryers) * 100}c", "drink": f"DRINK +1 {len(self.drinks) * 125}c"}
+        labels = {"chop": f"CHOP BOARD 50c", "hob": f"HOB +1 {len(self.hobs) * 100}c", "fryer": f"FRYER +1 {len(self.fryers) * 100}c", "drink": f"DRINK +1 {len(self.drinks) * 125}c"}
         for key, rect in buttons.items():
             pygame.draw.rect(SCREEN, BLUE if (key == "chop" and self.chop_unlocked) else (64, 74, 92), rect, border_radius=5)
             draw_text(SCREEN, labels[key], rect.center, SMALL, CREAM, True)
