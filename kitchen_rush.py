@@ -1,4 +1,5 @@
 import json
+import math
 import os
 import random
 import sys
@@ -92,6 +93,32 @@ def draw_image(surface, key, rect):
     surface.blit(scaled, scaled.get_rect(center=rect.center))
 
 
+def item_image_key(kind, cooked=False):
+    return {
+        "Burger": "cooked_burger" if cooked else "raw_burger",
+        "Chips": "cooked_chips" if cooked else "raw_chips",
+        "Drink": "filled_drink" if cooked else "empty_drink",
+        "Water": "filled_drink" if cooked else "empty_drink",
+        "Cola": "filled_drink" if cooked else "empty_drink",
+        "Fanta": "filled_drink" if cooked else "empty_drink",
+        "Bun": "bun",
+        "Potato": "potato",
+        "Lettuce": "lettuce" if cooked else "lettuce_raw",
+        "Tomato": "tomato" if cooked else "tomato_raw",
+        "Chopped Lettuce": "lettuce",
+        "Chopped Tomato": "tomato",
+    }[kind]
+
+
+def draw_item(surface, kind, rect, cooked=False):
+    if kind in {"Ketchup", "Mustard"}:
+        color = (210, 45, 35) if kind == "Ketchup" else (225, 185, 60)
+        pygame.draw.circle(surface, color, rect.center, min(rect.width, rect.height) // 3)
+    else:
+        key = "burger" if kind == "Burger" and cooked else item_image_key(kind, cooked)
+        draw_image(surface, key, rect)
+
+
 def clamp(value, low, high):
     return max(low, min(high, value))
 
@@ -154,6 +181,15 @@ class KitchenRush:
         self.filling = []
         self.chopping = False
         self.chop_unlocked = False
+        self.ketchup_unlocked = False
+        self.mustard_unlocked = False
+        self.cola_unlocked = False
+        self.fanta_unlocked = False
+        self.burger_upgrade = False
+        self.chips_upgrade = False
+        self.patience_factor = 0.85
+        self.active_save = None
+        self.autosave_timer = 0
         self.hobs = [Station("hob", 0)]
         self.fryers = [Station("fryer", 0)]
         self.drinks = [Station("drink", 0)]
@@ -183,7 +219,7 @@ class KitchenRush:
 
     def add_order(self):
         if not self.chop_unlocked:
-            recipes = [["Burger"], ["Drink"], ["Burger", "Drink"]]
+            recipes = [["Burger"], ["Water"], ["Burger", "Water"]]
             items = random.choice(recipes)
         else:
             # Every burger gets a random topping combination after the first upgrade.
@@ -191,21 +227,37 @@ class KitchenRush:
             burger = ["Burger"] + random.choice(burger_toppings)
             recipes = [
                 burger,
-                burger + ["Drink"],
+                burger + ["Water"],
                 burger + ["Chips"],
-                burger + ["Chips", "Drink"],
+                burger + ["Chips", "Water"],
                 ["Chips"],
-                ["Chips", "Drink"],
-                ["Drink"],
+                ["Chips", "Water"],
+                ["Water"],
             ]
             items = random.choice(recipes)
-        patience = (58 + len(items) * 14) * 0.85
+        if "Water" in items:
+            drink = random.choice(self.available_drinks())
+            items = [drink if item == "Water" else item for item in items]
+        if "Burger" in items:
+            if self.ketchup_unlocked and random.random() < 0.3:
+                items.append("Ketchup")
+            if self.mustard_unlocked and random.random() < 0.3:
+                items.append("Mustard")
+        patience = (58 + len(items) * 14) * self.patience_factor
         self.orders.append(Order(self.next_order, items, patience, patience))
         self.next_order += 1
         self.sort_orders()
 
+    def available_drinks(self):
+        drinks = ["Water"]
+        if self.cola_unlocked:
+            drinks.append("Cola")
+        if self.fanta_unlocked:
+            drinks.append("Fanta")
+        return drinks
+
     def order_work(self, order):
-        durations = {"Burger": 12.2, "Chips": 11.6, "Drink": 5.0, "Lettuce": 4.3, "Tomato": 4.3}
+        durations = {"Burger": 12.2, "Chips": 11.6, "Drink": 5.0, "Water": 5.0, "Cola": 5.0, "Fanta": 5.0, "Lettuce": 4.3, "Tomato": 4.3, "Ketchup": 0.5, "Mustard": 0.5}
         return sum(durations[item] for item in order.items if item not in order.plated)
 
     def sort_orders(self):
@@ -227,6 +279,9 @@ class KitchenRush:
             "Burger": "cooked_burger" if cooked else "raw_burger",
             "Chips": "cooked_chips" if cooked else "raw_chips",
             "Drink": "filled_drink" if cooked else "empty_drink",
+            "Water": "filled_drink" if cooked else "empty_drink",
+            "Cola": "filled_drink" if cooked else "empty_drink",
+            "Fanta": "filled_drink" if cooked else "empty_drink",
             "Bun": "bun",
             "Potato": "potato",
             "Lettuce": "lettuce" if cooked else "lettuce_raw",
@@ -236,10 +291,18 @@ class KitchenRush:
         }[kind]
 
     def source_rects(self):
-        sources = [("Burger", "raw_burger"), ("Bun", "bun"), ("Drink", "empty_drink")]
+        sources = [("Burger", "raw_burger"), ("Bun", "bun"), ("Water", "empty_drink")]
         if self.chop_unlocked:
             sources += [("Potato", "potato"), ("Lettuce", "lettuce_raw"), ("Tomato", "tomato_raw")]
-        return [(pygame.Rect(20 + i * 112, 665, 102, 58), kind, key) for i, (kind, key) in enumerate(sources)]
+        if self.cola_unlocked:
+            sources.append(("Cola", "filled_drink"))
+        if self.fanta_unlocked:
+            sources.append(("Fanta", "filled_drink"))
+        if self.ketchup_unlocked:
+            sources.append(("Ketchup", None))
+        if self.mustard_unlocked:
+            sources.append(("Mustard", None))
+        return [(pygame.Rect(20 + i * 100, 665, 96, 58), kind, key) for i, (kind, key) in enumerate(sources)]
 
     def storage_rects(self):
         return [pygame.Rect(430, 12, 76, 68), pygame.Rect(515, 12, 76, 68)]
@@ -270,6 +333,12 @@ class KitchenRush:
     def has_affordable_upgrade(self):
         return (
             (not self.chop_unlocked and self.money >= 50)
+            or (not self.ketchup_unlocked and self.money >= 150)
+            or (not self.mustard_unlocked and self.money >= 150)
+            or (not self.cola_unlocked and self.money >= 180)
+            or (not self.fanta_unlocked and self.money >= 260)
+            or (not self.burger_upgrade and self.money >= 250)
+            or (not self.chips_upgrade and self.money >= 250)
             or (len(self.hobs) < 4 and self.money >= len(self.hobs) * 100)
             or (len(self.fryers) < 4 and self.money >= len(self.fryers) * 100)
             or (len(self.drinks) < 4 and self.money >= len(self.drinks) * 125)
@@ -286,6 +355,13 @@ class KitchenRush:
             "next_order": self.next_order,
             "selected_order": self.selected_order,
             "chop_unlocked": self.chop_unlocked,
+            "ketchup_unlocked": self.ketchup_unlocked,
+            "mustard_unlocked": self.mustard_unlocked,
+            "cola_unlocked": self.cola_unlocked,
+            "fanta_unlocked": self.fanta_unlocked,
+            "burger_upgrade": self.burger_upgrade,
+            "chips_upgrade": self.chips_upgrade,
+            "patience_factor": self.patience_factor,
             "orders": [order.__dict__ for order in self.orders],
             "storage": self.storage,
             "hobs": self.serialize_stations(self.hobs),
@@ -295,6 +371,8 @@ class KitchenRush:
         }
         with open(os.path.join(SAVE_DIR, safe + ".json"), "w", encoding="utf-8") as handle:
             json.dump(data, handle, indent=2)
+        self.active_save = safe + ".json"
+        self.autosave_timer = 0
         self.save_dialog = None
         self.save_name = ""
         pygame.key.stop_text_input()
@@ -315,6 +393,13 @@ class KitchenRush:
         self.next_order = data["next_order"]
         self.selected_order = data["selected_order"]
         self.chop_unlocked = data["chop_unlocked"]
+        self.ketchup_unlocked = data.get("ketchup_unlocked", False)
+        self.mustard_unlocked = data.get("mustard_unlocked", False)
+        self.cola_unlocked = data.get("cola_unlocked", False)
+        self.fanta_unlocked = data.get("fanta_unlocked", False)
+        self.burger_upgrade = data.get("burger_upgrade", False)
+        self.chips_upgrade = data.get("chips_upgrade", False)
+        self.patience_factor = data.get("patience_factor", 0.85)
         self.orders = [Order(**order) for order in data["orders"]]
         self.storage = data.get("storage", [None, None])
         self.hobs = self.restore_stations(data["hobs"])
@@ -326,6 +411,8 @@ class KitchenRush:
         self.dragging = None
         self.filling.clear()
         self.chopping = False
+        self.active_save = filename
+        self.autosave_timer = 0
         self.refresh_layout()
         self.save_dialog = None
         self.save_name = ""
@@ -341,19 +428,21 @@ class KitchenRush:
         return stations
 
     def reward(self, order):
-        values = {"Burger": 11, "Chips": 9, "Drink": 6, "Lettuce": 1, "Tomato": 1}
+        values = {"Burger": 11 + (4 if self.burger_upgrade else 0), "Chips": 9 + (4 if self.chips_upgrade else 0), "Water": 6, "Drink": 6, "Cola": 9, "Fanta": 11, "Lettuce": 1, "Tomato": 1, "Ketchup": 3, "Mustard": 3}
         return sum(values[item] for item in order.items)
 
     def delivered_reward(self, order):
-        values = {"Burger": 11, "Chips": 9, "Drink": 6, "Lettuce": 1, "Tomato": 1}
-        return sum(values[item] for item in order.plated)
+        values = {"Burger": 11 + (4 if self.burger_upgrade else 0), "Chips": 9 + (4 if self.chips_upgrade else 0), "Water": 6, "Drink": 6, "Cola": 9, "Fanta": 11, "Lettuce": 1, "Tomato": 1, "Ketchup": 3, "Mustard": 3}
+        return sum(values.get(item, 0) for item in order.plated)
 
     def buy(self, kind):
         counts = {"hob": len(self.hobs), "fryer": len(self.fryers), "drink": len(self.drinks)}
-        if kind == "chop":
-            cost = 50
-            if self.chop_unlocked:
-                self.say("The chopping board is already unlocked.")
+        fixed = {"chop": 50, "ketchup": 150, "mustard": 150, "cola": 180, "fanta": 260, "burger_upgrade": 250, "chips_upgrade": 250}
+        if kind in fixed:
+            cost = fixed[kind]
+            flags = {"chop": self.chop_unlocked, "ketchup": self.ketchup_unlocked, "mustard": self.mustard_unlocked, "cola": self.cola_unlocked, "fanta": self.fanta_unlocked, "burger_upgrade": self.burger_upgrade, "chips_upgrade": self.chips_upgrade}
+            if flags[kind]:
+                self.say("That upgrade is already unlocked.")
                 return
         else:
             base = {"hob": 100, "fryer": 100, "drink": 125}[kind]
@@ -368,6 +457,24 @@ class KitchenRush:
         if kind == "chop":
             self.chop_unlocked = True
             self.say("Chopping board unlocked: lettuce, tomato, and potatoes are now available!")
+        elif kind == "ketchup":
+            self.ketchup_unlocked = True
+            self.say("Ketchup unlocked.")
+        elif kind == "mustard":
+            self.mustard_unlocked = True
+            self.say("Mustard unlocked.")
+        elif kind == "cola":
+            self.cola_unlocked = True
+            self.say("Cola unlocked.")
+        elif kind == "fanta":
+            self.fanta_unlocked = True
+            self.say("Fanta unlocked.")
+        elif kind == "burger_upgrade":
+            self.burger_upgrade = True
+            self.say("Burger value upgraded by 4c.")
+        elif kind == "chips_upgrade":
+            self.chips_upgrade = True
+            self.say("Chips value upgraded by 4c.")
         elif kind == "hob":
             self.hobs.append(Station("hob", len(self.hobs)))
             self.say("Another hob installed.")
@@ -384,6 +491,8 @@ class KitchenRush:
             return False
         if station.food.burning:
             item = {"kind": station.food.kind, "burnt": True}
+        elif station.kind == "board" and station.food.stage in {"raw", "chopping"}:
+            item = {"kind": station.food.kind, "burnt": False, "cooked": False, "chopping": station.food.stage == "chopping"}
         elif station.kind == "drink" and station.food.stage != "ready":
             self.say("Finish filling the drink between 90% and 100% first.")
             return False
@@ -405,12 +514,12 @@ class KitchenRush:
             self.say("That station slot is occupied.")
             return False
         kind = item["kind"] if isinstance(item, dict) else item
-        accepted = {"hob": "Burger", "fryer": "Chips", "drink": "Drink", "board": {"Potato", "Lettuce", "Tomato"}}
+        accepted = {"hob": "Burger", "fryer": "Chips", "drink": {"Water", "Drink", "Cola", "Fanta"}, "board": {"Potato", "Lettuce", "Tomato"}}
         if station.kind == "board":
             if not self.chop_unlocked or kind not in accepted["board"]:
                 self.say("That ingredient cannot go on the chopping board.")
                 return False
-        elif kind != accepted[station.kind]:
+        elif kind not in accepted[station.kind]:
             self.say(f"That item does not belong in this {station.kind} slot.")
             return False
         station.food = Food(kind)
@@ -437,7 +546,7 @@ class KitchenRush:
                 return False
             order.has_bun = True
         else:
-            delivered_kind = {"Chopped Lettuce": "Lettuce", "Chopped Tomato": "Tomato"}.get(kind, kind)
+            delivered_kind = {"Drink": "Water", "Chopped Lettuce": "Lettuce", "Chopped Tomato": "Tomato"}.get(kind, kind)
             if delivered_kind not in order.items:
                 self.say(f"Order #{order.number} does not need {kind.lower()}.")
                 return False
@@ -461,6 +570,7 @@ class KitchenRush:
         reward = self.reward(order)
         self.money += reward
         self.served += 1
+        self.patience_factor = max(0.8, self.patience_factor * 0.995)
         self.say(f"Order #{order.number} served automatically! +{reward}c")
         self.orders.remove(order)
         self.selected_order = min(self.selected_order, max(0, len(self.orders) - 1))
@@ -469,7 +579,7 @@ class KitchenRush:
 
     def auto_route(self, item):
         """Send a clicked item to the next valid station or waiting order."""
-        if isinstance(item, dict) and item.get("burnt"):
+        if isinstance(item, dict) and (item.get("burnt") or item.get("chopping")):
             self.held_item = item
             self.bin_item()
             return True
@@ -479,7 +589,7 @@ class KitchenRush:
                 for station in self.hobs:
                     if not station.food:
                         return self.drop_on_station(item, station)
-            elif kind == "Drink":
+            elif kind in {"Water", "Drink", "Cola", "Fanta"}:
                 for station in self.drinks:
                     if not station.food:
                         return self.drop_on_station(item, station)
@@ -490,14 +600,18 @@ class KitchenRush:
                 for order in self.orders:
                     if "Burger" in order.items and not order.has_bun:
                         return self.drop_on_order({"kind": "Bun", "burnt": False}, order)
+            elif kind in {"Ketchup", "Mustard"}:
+                for order in self.orders:
+                    if kind in order.items and kind not in order.plated:
+                        return self.drop_on_order({"kind": kind, "burnt": False}, order)
         else:
             if kind == "Chips" and not item.get("cooked", False):
                 for station in self.fryers:
                     if not station.food:
                         return self.drop_on_station(item, station)
-            elif kind in {"Burger", "Chips", "Drink", "Chopped Lettuce", "Chopped Tomato"}:
+            elif kind in {"Burger", "Chips", "Water", "Drink", "Cola", "Fanta", "Chopped Lettuce", "Chopped Tomato", "Ketchup", "Mustard"}:
                 for order in self.orders:
-                    needed = {"Chopped Lettuce": "Lettuce", "Chopped Tomato": "Tomato"}.get(kind, kind)
+                    needed = {"Drink": "Water", "Chopped Lettuce": "Lettuce", "Chopped Tomato": "Tomato"}.get(kind, kind)
                     if needed in order.items and needed not in order.plated and (kind != "Burger" or order.has_bun):
                         return self.drop_on_order(item, order)
         self.say(f"There is no valid next place for the {kind.lower()}.")
@@ -514,6 +628,11 @@ class KitchenRush:
     def update(self, dt):
         self.game_time += dt
         self.message_timer = max(0, self.message_timer - dt)
+        if self.active_save:
+            self.autosave_timer += dt
+            if self.autosave_timer >= 10:
+                self.save_game(self.active_save[:-5])
+                self.say("Autosaved.", 1)
         self.spawn_timer += dt
         if self.spawn_timer > 16 and len(self.orders) < 4:
             self.spawn_timer = 0
@@ -523,10 +642,13 @@ class KitchenRush:
             if order.patience <= 0:
                 partial = self.delivered_reward(order)
                 self.money += partial - 10
+                loss = math.ceil(max(0, self.money) * 0.2)
+                self.money -= loss
+                self.patience_factor = min(1.0, self.patience_factor * 1.03)
                 self.orders.remove(order)
                 self.missed += 1
                 self.selected_order = min(self.selected_order, max(0, len(self.orders) - 1))
-                self.say(f"Order #{order.number} walked out: +{partial}c delivered, -10c penalty.")
+                self.say(f"Order #{order.number} walked out: +{partial}c, -10c and -{loss}c (20%).")
 
         for station in self.drinks:
             if station in self.filling and station.food and not station.food.burning:
@@ -604,18 +726,14 @@ class KitchenRush:
         if self.drag_item or self.held_item:
             mouse = self.to_game(pygame.mouse.get_pos())
             kind = self.drag_item or self.held_item["kind"]
-            draw_image(SCREEN, self.food_image(kind, bool(self.held_item)), pygame.Rect(mouse[0] - 35, mouse[1] - 35, 70, 70))
+            draw_item(SCREEN, kind, pygame.Rect(mouse[0] - 35, mouse[1] - 35, 70, 70), bool(self.held_item))
         scaled = pygame.transform.smoothscale(SCREEN, DISPLAY.get_size())
         DISPLAY.blit(scaled, (0, 0))
         pygame.display.flip()
 
     def pause_upgrade_rects(self):
-        return {
-            "chop": pygame.Rect(300, 350, 250, 38),
-            "hob": pygame.Rect(570, 350, 250, 38),
-            "fryer": pygame.Rect(300, 400, 250, 38),
-            "drink": pygame.Rect(570, 400, 250, 38),
-        }
+        names = ["chop", "ketchup", "mustard", "cola", "fanta", "burger_upgrade", "chips_upgrade", "hob", "fryer", "drink"]
+        return {name: pygame.Rect(260 + (i % 3) * 230, 300 + (i // 3) * 40, 215, 32) for i, name in enumerate(names)}
 
     def draw_pause_menu(self):
         overlay = pygame.Surface(SCREEN.get_size(), pygame.SRCALPHA)
@@ -626,12 +744,17 @@ class KitchenRush:
         pygame.draw.rect(SCREEN, BLUE, panel, 2, border_radius=14)
         draw_text(SCREEN, "PAUSED", (panel.centerx, 112), TITLE, CREAM, True)
         draw_text(SCREEN, "Nothing is cooking, filling, chopping, or leaving while paused.", (panel.centerx, 145), SMALL, MUTED, True)
-        buttons = [(pygame.Rect(285, 180, 180, 40), "SAVE RUN"), (pygame.Rect(480, 180, 180, 40), "OPEN SAVE"), (pygame.Rect(675, 180, 180, 40), "RESUME")]
+        buttons = [(pygame.Rect(260, 180, 150, 40), "SAVE RUN"), (pygame.Rect(425, 180, 150, 40), "OPEN SAVE"), (pygame.Rect(590, 180, 150, 40), "DELETE SAVE"), (pygame.Rect(755, 180, 150, 40), "RESUME")]
         for rect, label in buttons:
             pygame.draw.rect(SCREEN, (64, 74, 92), rect, border_radius=6)
             draw_text(SCREEN, label, rect.center, SMALL, CREAM, True)
-        draw_text(SCREEN, "UPGRADES", (panel.centerx, 300), BIG, YELLOW, True)
-        labels = {"chop": "CHOP BOARD + POTATO 50c", "hob": f"HOB SLOT {len(self.hobs) * 100}c", "fryer": f"FRYER SLOT {len(self.fryers) * 100}c", "drink": f"DRINK SLOT {len(self.drinks) * 125}c"}
+        draw_text(SCREEN, "UPGRADES", (panel.centerx, 270), BIG, YELLOW, True)
+        labels = {
+            "chop": "CHOP BOARD 50c", "ketchup": "KETCHUP 150c", "mustard": "MUSTARD 150c",
+            "cola": "COLA 180c", "fanta": "FANTA 260c", "burger_upgrade": "BURGERS +4c 250c",
+            "chips_upgrade": "CHIPS +4c 250c", "hob": f"HOB SLOT {len(self.hobs) * 100}c",
+            "fryer": f"FRYER SLOT {len(self.fryers) * 100}c", "drink": f"DRINK SLOT {len(self.drinks) * 125}c",
+        }
         for key, rect in self.pause_upgrade_rects().items():
             pygame.draw.rect(SCREEN, BLUE if key == "chop" and self.chop_unlocked else (64, 74, 92), rect, border_radius=6)
             draw_text(SCREEN, labels[key], rect.center, SMALL, CREAM, True)
@@ -642,9 +765,10 @@ class KitchenRush:
             draw_text(SCREEN, "SAVE NAME (type, then press ENTER):", (320, 530), SMALL, CREAM)
             pygame.draw.rect(SCREEN, BG, pygame.Rect(320, 555, 540, 35), border_radius=5)
             draw_text(SCREEN, self.save_name + "_", (330, 563), FONT, CREAM)
-        elif self.save_dialog == "load":
+        elif self.save_dialog in {"load", "delete"}:
             pygame.draw.rect(SCREEN, PANEL_DARK, pygame.Rect(300, 515, 580, 95), border_radius=8)
-            draw_text(SCREEN, "CLICK A SAVE FILE TO LOAD:", (320, 530), SMALL, CREAM)
+            action = "LOAD" if self.save_dialog == "load" else "DELETE"
+            draw_text(SCREEN, f"CLICK A SAVE FILE TO {action}:", (320, 530), SMALL, CREAM)
             for i, name in enumerate(files[:4]):
                 rect = pygame.Rect(320 + i * 130, 560, 120, 30)
                 pygame.draw.rect(SCREEN, (64, 74, 92), rect, border_radius=5)
@@ -656,7 +780,7 @@ class KitchenRush:
             pygame.draw.rect(SCREEN, PANEL, rect, border_radius=8)
             pygame.draw.rect(SCREEN, ORANGE if self.storage[i] else (77, 87, 108), rect, 2, border_radius=8)
             if self.storage[i]:
-                draw_image(SCREEN, self.food_image(self.storage[i]["kind"], True), rect.inflate(-12, -12))
+                draw_item(SCREEN, self.storage[i]["kind"], rect.inflate(-12, -12), True)
             else:
                 draw_text(SCREEN, str(i + 1), rect.center, SMALL, MUTED, True)
 
@@ -737,8 +861,7 @@ class KitchenRush:
             draw_text(SCREEN, f"#{order.number}  {order.label()}", (rect.x + 9, rect.y + 7), SMALL, CREAM)
             delivered = (["Burger"] if "Burger" in order.plated else (["Bun"] if order.has_bun else [])) + [x for x in order.plated if x != "Burger"]
             for n, item in enumerate(delivered[:4]):
-                item_key = "burger" if item == "Burger" else self.food_image(item, True)
-                draw_image(SCREEN, item_key, pygame.Rect(rect.x + 10 + n * 38, rect.y + 28, 30, 25))
+                draw_item(SCREEN, item, pygame.Rect(rect.x + 10 + n * 38, rect.y + 28, 30, 25), True)
             pygame.draw.rect(SCREEN, PANEL_DARK, (rect.x + 10, rect.bottom - 13, rect.width - 20, 7), border_radius=4)
             pygame.draw.rect(SCREEN, GREEN if order.patience > 35 else RED, (rect.x + 10, rect.bottom - 13, int((rect.width - 20) * order.patience / order.max_patience), 7), border_radius=4)
 
@@ -747,7 +870,11 @@ class KitchenRush:
         draw_text(SCREEN, self.message if self.message_timer > 0 else "Drag items between stations, storage, BIN, and matching orders.", (35, 580), SMALL, CREAM)
         for rect, kind, key in self.source_rects():
             pygame.draw.rect(SCREEN, PANEL, rect, border_radius=6)
-            draw_image(SCREEN, key, pygame.Rect(rect.x + 3, rect.y + 4, 42, 48))
+            if key:
+                draw_image(SCREEN, key, pygame.Rect(rect.x + 3, rect.y + 4, 42, 48))
+            else:
+                sauce_color = (210, 45, 35) if kind == "Ketchup" else (225, 185, 60)
+                pygame.draw.circle(SCREEN, sauce_color, (rect.x + 22, rect.centery), 17)
             draw_text(SCREEN, kind.upper(), (rect.x + 48, rect.y + 21), SMALL, CREAM)
         pygame.draw.rect(SCREEN, RED, pygame.Rect(1060, 665, 80, 58), border_radius=7)
         draw_text(SCREEN, "BIN", (1100, 694), BIG, CREAM, True)
@@ -759,11 +886,18 @@ class KitchenRush:
 
     def click(self, pos):
         self.auto_click_pending = False
-        if self.save_dialog == "load":
+        if self.save_dialog in {"load", "delete"}:
             files = sorted(name for name in os.listdir(SAVE_DIR) if name.endswith(".json"))
             for i, filename in enumerate(files[:4]):
                 if pygame.Rect(320 + i * 130, 560, 120, 30).collidepoint(pos):
-                    self.load_game(filename)
+                    if self.save_dialog == "load":
+                        self.load_game(filename)
+                    else:
+                        os.remove(os.path.join(SAVE_DIR, filename))
+                        if self.active_save == filename:
+                            self.active_save = None
+                        self.save_dialog = None
+                        self.say(f"Deleted {filename[:-5]}.")
                     return
             return
         if self.save_dialog == "save":
@@ -772,15 +906,18 @@ class KitchenRush:
             self.paused = not self.paused
             return
         if self.paused:
-            if pygame.Rect(285, 180, 180, 40).collidepoint(pos):
+            if pygame.Rect(260, 180, 150, 40).collidepoint(pos):
                 self.save_dialog = "save"
                 self.save_name = ""
                 pygame.key.start_text_input()
                 return
-            if pygame.Rect(480, 180, 180, 40).collidepoint(pos):
+            if pygame.Rect(425, 180, 150, 40).collidepoint(pos):
                 self.save_dialog = "load"
                 return
-            if pygame.Rect(675, 180, 180, 40).collidepoint(pos):
+            if pygame.Rect(590, 180, 150, 40).collidepoint(pos):
+                self.save_dialog = "delete"
+                return
+            if pygame.Rect(755, 180, 150, 40).collidepoint(pos):
                 self.paused = False
                 return
             for key, rect in self.pause_upgrade_rects().items():
