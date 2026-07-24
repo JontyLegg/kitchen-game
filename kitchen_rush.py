@@ -131,6 +131,7 @@ class Order:
     max_patience: float
     plated: list = field(default_factory=list)
     has_bun: bool = False
+    extra_hard: bool = False
 
     def label(self):
         return " + ".join(self.items)
@@ -190,6 +191,9 @@ class KitchenRush:
         self.patience_factor = 0.85
         self.active_save = None
         self.autosave_timer = 0
+        self.difficulty = "Medium"
+        self.hard_order_timer = 0
+        self.next_hard_order = 300
         self.hobs = [Station("hob", 0)]
         self.fryers = [Station("fryer", 0)]
         self.drinks = [Station("drink", 0)]
@@ -243,10 +247,43 @@ class KitchenRush:
                 items.append("Ketchup")
             if self.mustard_unlocked and random.random() < 0.3:
                 items.append("Mustard")
-        patience = (58 + len(items) * 14) * self.patience_factor
-        self.orders.append(Order(self.next_order, items, patience, patience))
+        patience = (58 + len(items) * 14) * self.patience_factor * self.difficulty_patience_multiplier()
+        self.orders.append(Order(self.next_order, items, patience, patience, extra_hard=False))
         self.next_order += 1
         self.sort_orders()
+
+    def add_extra_hard_order(self):
+        items = ["Burger"]
+        if self.chop_unlocked:
+            items += ["Lettuce", "Tomato", "Chips"]
+        items.append(random.choice(self.available_drinks()))
+        if self.ketchup_unlocked:
+            items.append("Ketchup")
+        if self.mustard_unlocked:
+            items.append("Mustard")
+        patience = (42 + len(items) * 8) * self.patience_factor * self.difficulty_patience_multiplier()
+        self.orders = [order for order in self.orders if order.plated or order.has_bun]
+        self.orders.append(Order(self.next_order, items, patience, patience, extra_hard=True))
+        self.next_order += 1
+        self.sort_orders()
+        self.say("EXTRA HARD ORDER! Unstarted tickets were cleared.", 5)
+
+    def difficulty_patience_multiplier(self):
+        return {"Easy": 1.15, "Medium": 1.0, "Hard": 0.85}[self.difficulty]
+
+    def cooking_speed_multiplier(self):
+        return {"Easy": 1 / 1.05, "Medium": 1.0, "Hard": 1 / 0.95}[self.difficulty]
+
+    def set_difficulty(self, difficulty):
+        if difficulty == self.difficulty:
+            return
+        old = self.difficulty_patience_multiplier()
+        self.difficulty = difficulty
+        ratio = self.difficulty_patience_multiplier() / old
+        for order in self.orders:
+            order.patience *= ratio
+            order.max_patience *= ratio
+        self.say(f"Difficulty set to {difficulty}.")
 
     def available_drinks(self):
         drinks = ["Water"]
@@ -362,6 +399,9 @@ class KitchenRush:
             "burger_upgrade": self.burger_upgrade,
             "chips_upgrade": self.chips_upgrade,
             "patience_factor": self.patience_factor,
+            "difficulty": self.difficulty,
+            "hard_order_timer": self.hard_order_timer,
+            "next_hard_order": self.next_hard_order,
             "orders": [order.__dict__ for order in self.orders],
             "storage": self.storage,
             "hobs": self.serialize_stations(self.hobs),
@@ -400,6 +440,9 @@ class KitchenRush:
         self.burger_upgrade = data.get("burger_upgrade", False)
         self.chips_upgrade = data.get("chips_upgrade", False)
         self.patience_factor = data.get("patience_factor", 0.85)
+        self.difficulty = data.get("difficulty", "Medium")
+        self.hard_order_timer = data.get("hard_order_timer", 0)
+        self.next_hard_order = data.get("next_hard_order", 300)
         self.orders = [Order(**order) for order in data["orders"]]
         self.storage = data.get("storage", [None, None])
         self.hobs = self.restore_stations(data["hobs"])
@@ -567,7 +610,7 @@ class KitchenRush:
         return True
 
     def complete_order(self, order):
-        reward = self.reward(order)
+        reward = self.reward(order) + (30 if order.extra_hard else 0)
         self.money += reward
         self.served += 1
         self.patience_factor = max(0.8, self.patience_factor * 0.995)
@@ -633,6 +676,11 @@ class KitchenRush:
             if self.autosave_timer >= 10:
                 self.save_game(self.active_save[:-5])
                 self.say("Autosaved.", 1)
+        self.hard_order_timer += dt
+        if self.hard_order_timer >= self.next_hard_order:
+            self.hard_order_timer = 0
+            self.next_hard_order = random.uniform(270, 330)
+            self.add_extra_hard_order()
         self.spawn_timer += dt
         if self.spawn_timer > 16 and len(self.orders) < 4:
             self.spawn_timer = 0
@@ -640,6 +688,15 @@ class KitchenRush:
         for order in self.orders[:]:
             order.patience -= dt
             if order.patience <= 0:
+                if order.extra_hard:
+                    loss = math.ceil(max(0, self.money) * 0.15)
+                    self.money -= loss
+                    self.patience_factor = min(1.0, self.patience_factor * 1.03)
+                    self.orders.remove(order)
+                    self.missed += 1
+                    self.selected_order = min(self.selected_order, max(0, len(self.orders) - 1))
+                    self.say(f"EXTRA HARD ORDER missed: -{loss}c (15%).")
+                    continue
                 partial = self.delivered_reward(order)
                 self.money += partial - 10
                 loss = math.ceil(max(0, self.money) * 0.2)
@@ -652,7 +709,7 @@ class KitchenRush:
 
         for station in self.drinks:
             if station in self.filling and station.food and not station.food.burning:
-                station.fill += dt * 0.20125
+                station.fill += dt * 0.20125 * self.cooking_speed_multiplier()
                 station.food.stage = "filling"
                 if station.fill > 1:
                     station.food.burning = True
@@ -660,7 +717,7 @@ class KitchenRush:
                         self.filling.remove(station)
                     self.say("That drink overflowed. Drag it into the BIN.")
         if self.chopping and self.board.food:
-            self.board.food.progress += dt / 4.3
+            self.board.food.progress += dt / 4.3 * self.cooking_speed_multiplier()
             self.board.food.stage = "chopping"
             if self.board.food.progress >= 1:
                 result = {"Potato": "Chips", "Lettuce": "Chopped Lettuce", "Tomato": "Chopped Tomato"}[self.board.food.kind]
@@ -675,7 +732,7 @@ class KitchenRush:
                 continue
             food = station.food
             if food.stage == "raw":
-                food.progress += dt * 0.165
+                food.progress += dt * 0.165 * self.cooking_speed_multiplier()
                 if food.progress >= 1:
                     food.progress = 1
                     food.stage = "ready"
@@ -691,7 +748,7 @@ class KitchenRush:
                 continue
             food = station.food
             if food.stage == "raw":
-                food.progress += dt * 0.138
+                food.progress += dt * 0.138 * self.cooking_speed_multiplier()
                 if food.progress >= 1:
                     food.progress = 1
                     food.stage = "ready"
@@ -735,6 +792,9 @@ class KitchenRush:
         names = ["chop", "ketchup", "mustard", "cola", "fanta", "burger_upgrade", "chips_upgrade", "hob", "fryer", "drink"]
         return {name: pygame.Rect(260 + (i % 3) * 230, 300 + (i // 3) * 40, 215, 32) for i, name in enumerate(names)}
 
+    def difficulty_rects(self):
+        return {name: pygame.Rect(360 + i * 155, 235, 140, 32) for i, name in enumerate(("Easy", "Medium", "Hard"))}
+
     def draw_pause_menu(self):
         overlay = pygame.Surface(SCREEN.get_size(), pygame.SRCALPHA)
         overlay.fill((0, 0, 0, 185))
@@ -748,6 +808,10 @@ class KitchenRush:
         for rect, label in buttons:
             pygame.draw.rect(SCREEN, (64, 74, 92), rect, border_radius=6)
             draw_text(SCREEN, label, rect.center, SMALL, CREAM, True)
+        draw_text(SCREEN, f"DIFFICULTY: {self.difficulty}", (panel.centerx, 215), BIG, YELLOW, True)
+        for name, rect in self.difficulty_rects().items():
+            pygame.draw.rect(SCREEN, BLUE if name == self.difficulty else (64, 74, 92), rect, border_radius=6)
+            draw_text(SCREEN, name, rect.center, SMALL, CREAM, True)
         draw_text(SCREEN, "UPGRADES", (panel.centerx, 270), BIG, YELLOW, True)
         labels = {
             "chop": "CHOP BOARD 50c", "ketchup": "KETCHUP 150c", "mustard": "MUSTARD 150c",
@@ -857,8 +921,9 @@ class KitchenRush:
             partial = bool(needed & supplied) or ("Burger" in needed and order.has_bun)
             outline = GREEN if complete else ORANGE if partial else RED
             pygame.draw.rect(SCREEN, PANEL, rect, border_radius=8)
-            pygame.draw.rect(SCREEN, outline, rect, 3, border_radius=8)
-            draw_text(SCREEN, f"#{order.number}  {order.label()}", (rect.x + 9, rect.y + 7), SMALL, CREAM)
+            pygame.draw.rect(SCREEN, outline, rect, 6 if order.extra_hard else 3, border_radius=8)
+            label = f"EXTRA HARD #{order.number}" if order.extra_hard else f"#{order.number}"
+            draw_text(SCREEN, f"{label}  {order.label()}", (rect.x + 9, rect.y + 7), SMALL, CREAM)
             delivered = (["Burger"] if "Burger" in order.plated else (["Bun"] if order.has_bun else [])) + [x for x in order.plated if x != "Burger"]
             for n, item in enumerate(delivered[:4]):
                 draw_item(SCREEN, item, pygame.Rect(rect.x + 10 + n * 38, rect.y + 28, 30, 25), True)
@@ -920,6 +985,10 @@ class KitchenRush:
             if pygame.Rect(755, 180, 150, 40).collidepoint(pos):
                 self.paused = False
                 return
+            for name, rect in self.difficulty_rects().items():
+                if rect.collidepoint(pos):
+                    self.set_difficulty(name)
+                    return
             for key, rect in self.pause_upgrade_rects().items():
                 if rect.collidepoint(pos):
                     self.buy(key)

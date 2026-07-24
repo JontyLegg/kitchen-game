@@ -21,11 +21,13 @@ python kitchen_rush.py
 - Burger and chips value upgrades cost 250c each and add 4c to their served value.
 - Ketchup and mustard have simple built-in placeholder icons until dedicated art is added.
 - Press `P` or click the top-right pause button to freeze the kitchen. Upgrades and save/load are available only while paused.
+- Choose Easy, Medium, or Hard in the pause menu. Easy gives customers 15% more patience and makes timed preparation 5% slower; Hard does the reverse.
 - Save a run by choosing `SAVE RUN`, typing a name, and pressing Enter. Use `OPEN SAVE` later to load a previous run.
 - Drag finished items to the matching order. Extra or incorrect items are rejected.
 - A bun must arrive before a burger. Completed orders serve automatically.
 - Drag a finished or burnt item into either storage slot or the BIN.
 - Waiting tickets are ordered by their remaining preparation work so shorter orders appear first.
+- An extra-hard ticket appears about every five minutes, has a bold outline, more items, and less patience. It clears unstarted tickets; completing it pays an extra 30c, while missing it costs 15% of current money.
 - If a run is loaded from a save, it autosaves periodically. Save files can be opened or deleted from the pause menu.
 - Hold `CHOP` on the chopping board to prepare potatoes, lettuce, or tomatoes.
 
