@@ -766,7 +766,7 @@ class KitchenRush:
                         self.say("Burger flipped. Cook the second side.")
                     else:
                         self.say("Wait until the burger is ready before flipping it.")
-                elif station.kind == "drink" and self.fill_rect(station).collidepoint(pos):
+                elif station.kind == "drink" and self.fill_rect(station).collidepoint(pos) and station.food.stage != "ready":
                     if station not in self.filling:
                         self.filling.append(station)
                     self.say("Filling... release between 90% and 100%.")
@@ -818,8 +818,8 @@ class KitchenRush:
                     station.food.stage = "ready"
                     self.say("Drink filled and ready to drag.")
                 else:
-                    station.food.burning = True
-                    self.say("That drink is outside the 90%–100% range. Drag it into the BIN.")
+                    station.food.stage = "raw"
+                    self.say("Drink paused below 90%. Hold FILL again to continue.")
 
     def run(self):
         while self.running:
