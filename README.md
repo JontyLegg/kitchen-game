@@ -11,10 +11,11 @@ python kitchen_rush.py
 ## How to play
 
 - Click a customer ticket to select it.
-- Use `PREPARE BURGER`, then click `FLIP PATTY` before the hob bar finishes flashing.
-- Use `DROP CHIPS`; remove them during their three-second ready window.
-- Use `PREPARE DRINK`, add one scoop of ice, then hold `FILL DRINK` and release around 80% full.
-- Click `SERVE` when all requested items are ready.
+- Drag the ingredient cards onto the correct cooker: burger to the hob, chips to the fryer, and drink to the filler.
+- Tap the burger on the hob to flip it. Tap a ready cooker to pick the finished item up, then drag it to `PLATE UP`.
+- Add ice and hold the drink filler to pour; release around 80% full. The drink must be correctly filled before it can be plated.
+- Drag a bun onto every plate before dragging a burger onto it.
+- Click `SERVE` when the selected ticket's plate is complete.
 - Click `BIN` when an item has burned or a drink has been spoiled.
 - Left/right arrow keys change the selected ticket; Space serves the selected ticket; Escape quits.
 
