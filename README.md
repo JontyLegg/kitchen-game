@@ -14,9 +14,9 @@ python kitchen_rush.py
 - Drag the ingredient cards onto the correct cooker: burger to the hob, chips to the fryer, and drink to the filler.
 - Tap the burger on the hob to flip it. Tap a ready cooker to pick the finished item up, then drag it to `PLATE UP`.
 - Click and hold `FILL DRINK` until it completes; filling takes longer than the other stations and then changes the empty cup into a filled drink.
-- Drag a bun onto every plate before dragging a burger onto it.
+- Drag a bun onto an order before dragging a burger onto it.
 - Drag each finished item onto its matching customer ticket in any order. Ticket outlines are red for untouched, orange for partly complete, and green when complete.
-- Click `SERVE` when the selected ticket is complete.
+- Completed tickets are served automatically as soon as all requested items arrive.
 - Click `BIN` when an item has burned or a drink has been spoiled.
 - Left/right arrow keys change the selected ticket; Space serves the selected ticket; Escape quits.
 
