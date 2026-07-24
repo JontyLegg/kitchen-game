@@ -13,7 +13,7 @@ python kitchen_rush.py
 - Click a customer ticket to select it.
 - Drag the ingredient cards onto the correct cooker: burger to the hob, chips to the fryer, and drink to the filler.
 - Tap the burger on the hob to flip it. Tap a ready cooker to pick the finished item up, then drag it to `PLATE UP`.
-- Add ice and hold the drink filler to pour; release around 80% full. The drink must be correctly filled before it can be plated.
+- Click and hold `FILL DRINK`, then release around 80% full. The drink changes from an empty cup to a filled drink when complete.
 - Drag a bun onto every plate before dragging a burger onto it.
 - Click `SERVE` when the selected ticket's plate is complete.
 - Click `BIN` when an item has burned or a drink has been spoiled.

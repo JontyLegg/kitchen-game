@@ -1,4 +1,5 @@
 import math
+import os
 import random
 import sys
 from dataclasses import dataclass, field
@@ -10,6 +11,24 @@ pygame.init()
 pygame.display.set_caption("Kitchen Rush")
 SCREEN = pygame.display.set_mode((1180, 760))
 CLOCK = pygame.time.Clock()
+IMAGE_DIR = os.path.join(os.path.dirname(__file__), "images")
+
+
+def image(name):
+    return pygame.image.load(os.path.join(IMAGE_DIR, name)).convert_alpha()
+
+
+IMAGES = {
+    "raw_burger": image("uncooked burger patty.png"),
+    "cooked_burger": image("cooked Burger patty.png"),
+    "raw_chips": image("uncooked chips.png"),
+    "cooked_chips": image("cooked chips.png"),
+    "empty_drink": image("empty cup.png"),
+    "filled_drink": image("filled cup.png"),
+    "bun": image("empty burger bun.png"),
+    "burger": image("burger buns with patty.png"),
+    "pan": image("pan.png"),
+}
 
 FONT = pygame.font.SysFont("arial", 20)
 SMALL = pygame.font.SysFont("arial", 16)
@@ -35,6 +54,13 @@ def draw_text(surface, text, pos, font=FONT, color=CREAM, center=False):
     if not center:
         rect.topleft = pos
     surface.blit(image, rect)
+
+
+def draw_image(surface, key, rect, padding=0):
+    target = rect.inflate(-padding * 2, -padding * 2)
+    source = IMAGES[key]
+    scaled = pygame.transform.smoothscale(source, target.size)
+    surface.blit(scaled, scaled.get_rect(center=rect.center))
 
 
 def clamp(value, low, high):
@@ -70,7 +96,6 @@ class Station:
     kind: str
     food: Food | None = None
     fill: float = 0.0
-    ice: float = 0.0
 
 
 class KitchenRush:
@@ -127,12 +152,12 @@ class KitchenRush:
         if station.food.stage != "ready":
             self.say("That item is still cooking.")
             return False
-        if station.food.kind == "Drink" and not (0.74 <= station.ice <= 1.0 and 0.74 <= station.fill <= 0.96):
-            self.say("That drink has the wrong ice or fill amount. Bin it and remake it.")
+        if station.food.kind == "Drink" and not (0.74 <= station.fill <= 0.96):
+            self.say("Fill the drink to the target line before taking it off.")
             return False
-        item = {"kind": station.food.kind, "ice": station.ice, "fill": station.fill}
+        item = {"kind": station.food.kind, "fill": station.fill}
         station.food = None
-        station.fill = station.ice = 0
+        station.fill = 0
         self.held_item = item
         self.say(f"{item['kind']} picked up. Drag it to the plate-up station.")
         return True
@@ -147,7 +172,7 @@ class KitchenRush:
             station.food = Food("Chips")
         elif kind == "Drink" and station.kind == "drink":
             station.food = Food("Drink")
-            station.fill = station.ice = 0
+            station.fill = 0
         else:
             self.say("That ingredient belongs at a different station.")
             return
@@ -217,15 +242,7 @@ class KitchenRush:
             else:
                 station.food = Food("Drink", "raw")
                 station.fill = 0
-                station.ice = 0
-                self.say("Cup placed. Add ice, then fill carefully.")
-        elif action == "ice":
-            station = self.stations[2]
-            if station.food and station.food.kind == "Drink":
-                station.ice = clamp(station.ice + 0.25, 0, 1)
-                self.say("Ice added. The target is one scoop.")
-            else:
-                self.say("Place a cup at the drink filler first.")
+                self.say("Empty cup placed. Use FILL DRINK when ready.")
         elif action == "serve":
             self.serve_order(order)
         elif action == "bin":
@@ -233,7 +250,6 @@ class KitchenRush:
                 if station.food and station.food.burning:
                     station.food = None
                     station.fill = 0
-                    station.ice = 0
                     self.say("Burnt item binned. Start that item again.")
                     return
             self.say("Nothing burnt needs binning.")
@@ -330,6 +346,13 @@ class KitchenRush:
             self.draw_station(station)
         self.draw_plate()
         self.draw_controls()
+        if self.drag_item or self.held_item:
+            mouse = pygame.mouse.get_pos()
+            if self.drag_item:
+                key = {"Burger": "raw_burger", "Chips": "raw_chips", "Drink": "empty_drink", "Bun": "bun"}[self.drag_item]
+            else:
+                key = {"Burger": "cooked_burger", "Chips": "cooked_chips", "Drink": "filled_drink"}[self.held_item["kind"]]
+            draw_image(SCREEN, key, pygame.Rect(mouse[0] - 42, mouse[1] - 42, 84, 84))
         pygame.display.flip()
 
     def draw_orders(self):
@@ -339,8 +362,15 @@ class KitchenRush:
             width = 245
             rect = pygame.Rect(x, 440, width, 122)
             selected = index == self.selected_order
+            needed = set(order.items)
+            supplied = set(self.plate_items)
+            complete = needed.issubset(supplied) and ("Burger" not in needed or self.plate_has_bun)
+            partial = bool(needed & supplied) or ("Burger" in needed and self.plate_has_bun)
+            if index != self.selected_order:
+                complete = partial = False
+            outline = GREEN if complete else ORANGE if partial else RED
             pygame.draw.rect(SCREEN, (67, 75, 95) if selected else PANEL, rect, border_radius=10)
-            pygame.draw.rect(SCREEN, ORANGE if selected else (76, 83, 101), rect, 3, border_radius=10)
+            pygame.draw.rect(SCREEN, outline, rect, 4 if selected else 3, border_radius=10)
             draw_text(SCREEN, f"#{order.number}", (x + 14, 451), BIG, ORANGE)
             draw_text(SCREEN, order.label(), (x + 55, 454), FONT, CREAM)
             draw_text(SCREEN, "patience", (x + 14, 493), SMALL, MUTED)
@@ -356,10 +386,14 @@ class KitchenRush:
         pygame.draw.rect(SCREEN, PANEL, rect, border_radius=10)
         pygame.draw.rect(SCREEN, ORANGE if self.held_item else (77, 87, 108), rect, 2, border_radius=10)
         draw_text(SCREEN, "PLATE UP", (rect.x + 14, rect.y + 10), BIG, CREAM)
-        draw_text(SCREEN, "BUN" if self.plate_has_bun else "NO BUN", (rect.x + 14, rect.y + 47), SMALL, GREEN if self.plate_has_bun else RED)
-        items = ", ".join(self.plate_items) if self.plate_items else "empty plate"
-        draw_text(SCREEN, items, (rect.x + 14, rect.y + 76), SMALL, MUTED)
-        draw_text(SCREEN, "drop food here", (rect.right - 102, rect.y + 47), SMALL, ORANGE)
+        if self.plate_has_bun and "Burger" in self.plate_items:
+            draw_image(SCREEN, "burger", pygame.Rect(rect.x + 12, rect.y + 35, 88, 74))
+        elif self.plate_has_bun:
+            draw_image(SCREEN, "bun", pygame.Rect(rect.x + 12, rect.y + 35, 88, 74))
+        else:
+            draw_text(SCREEN, "DRAG BUN FIRST", (rect.x + 60, rect.y + 70), SMALL, RED, True)
+        draw_text(SCREEN, "+ " + ", ".join(item for item in self.plate_items if item != "Burger") if self.plate_items else "", (rect.x + 108, rect.y + 58), SMALL, CREAM)
+        draw_text(SCREEN, "drop items here", (rect.x + 108, rect.y + 86), SMALL, ORANGE)
 
     def draw_station(self, station):
         pygame.draw.rect(SCREEN, PANEL, station.rect, border_radius=14)
@@ -369,32 +403,26 @@ class KitchenRush:
         pygame.draw.rect(SCREEN, PANEL_DARK, inner, border_radius=10)
         food = station.food
         if station.kind == "hob":
-            pygame.draw.ellipse(SCREEN, (104, 50, 48), inner.inflate(-80, -28))
+            draw_image(SCREEN, "pan", pygame.Rect(inner.centerx - 75, inner.y + 2, 150, 135))
             if food:
-                color = (74, 42, 29) if food.burning else (177, 91, 48)
-                pygame.draw.ellipse(SCREEN, color, inner.inflate(-100, -45))
+                draw_image(SCREEN, "cooked_burger" if food.stage in ("ready", "warning") else "raw_burger", pygame.Rect(inner.centerx - 55, inner.y + 28, 110, 90))
                 self.draw_food_status(food, inner, "FLIP" if not food.flipped else "COOKING")
             else:
-                draw_text(SCREEN, "Click PREPARE BURGER", inner.center, SMALL, MUTED, True)
+                draw_text(SCREEN, "DROP RAW PATTY", inner.center, SMALL, MUTED, True)
         elif station.kind == "fryer":
             pygame.draw.rect(SCREEN, (151, 98, 43), inner.inflate(-55, -28), border_radius=9)
             if food:
-                color = (76, 44, 23) if food.burning else (239, 184, 67)
-                for i in range(5):
-                    pygame.draw.line(SCREEN, color, (inner.centerx - 45 + i * 22, inner.centery - 10), (inner.centerx - 52 + i * 22, inner.centery + 30), 7)
+                draw_image(SCREEN, "cooked_chips" if food.stage in ("ready", "warning") else "raw_chips", pygame.Rect(inner.centerx - 90, inner.y + 20, 180, 105))
                 self.draw_food_status(food, inner, "FRYING")
             else:
-                draw_text(SCREEN, "Click DROP CHIPS", inner.center, SMALL, MUTED, True)
+                draw_text(SCREEN, "DROP RAW CHIPS", inner.center, SMALL, MUTED, True)
         else:
             pygame.draw.rect(SCREEN, (75, 121, 147), inner.inflate(-110, -20), border_radius=12)
             if food:
-                pygame.draw.rect(SCREEN, (169, 218, 234), (inner.centerx - 42, inner.centery - 33, 84, 80), border_radius=8)
-                if station.fill > 0:
-                    pygame.draw.rect(SCREEN, (58, 164, 214), (inner.centerx - 34, inner.centery + 38 - int(64 * station.fill), 68, int(64 * station.fill)), border_radius=4)
-                draw_text(SCREEN, f"ICE {int(station.ice * 100)}%", (station.rect.x + 24, station.rect.bottom - 48), SMALL, CREAM)
-                draw_text(SCREEN, f"FILL {int(station.fill * 100)}%", (station.rect.x + 120, station.rect.bottom - 48), SMALL, CREAM)
+                draw_image(SCREEN, "filled_drink" if food.stage == "ready" else "empty_drink", pygame.Rect(inner.centerx - 52, inner.y + 5, 104, 130))
+                draw_text(SCREEN, f"FILL {int(station.fill * 100)}%", (station.rect.x + 24, station.rect.bottom - 48), SMALL, CREAM)
             else:
-                draw_text(SCREEN, "Click PREPARE DRINK", inner.center, SMALL, MUTED, True)
+                draw_text(SCREEN, "DROP EMPTY CUP", inner.center, SMALL, MUTED, True)
 
     def draw_food_status(self, food, area, label):
         bar = pygame.Rect(area.x + 18, area.bottom - 34, area.width - 36, 14)
@@ -415,8 +443,12 @@ class KitchenRush:
             rect = pygame.Rect(58 + index * 135, 650, 118, 48)
             pygame.draw.rect(SCREEN, (64, 74, 92), rect, border_radius=7)
             pygame.draw.rect(SCREEN, ORANGE if self.drag_item == kind else (113, 124, 145), rect, 2 if self.drag_item == kind else 1, border_radius=7)
+            image_key = {"Burger": "raw_burger", "Chips": "raw_chips", "Drink": "empty_drink", "Bun": "bun"}[kind]
+            draw_image(SCREEN, image_key, pygame.Rect(rect.x + 4, rect.y + 4, 40, 40))
             draw_text(SCREEN, f"DRAG {label}", rect.center, SMALL, CREAM, True)
-        draw_text(SCREEN, "HOLD drink filler to pour", (608, 666), SMALL, MUTED)
+        fill_rect = pygame.Rect(608, 650, 130, 48)
+        pygame.draw.rect(SCREEN, BLUE if self.filling else (64, 74, 92), fill_rect, border_radius=7)
+        draw_text(SCREEN, "FILL DRINK", fill_rect.center, SMALL, CREAM, True)
         serve_rect = pygame.Rect(948, 650, 84, 48)
         bin_rect = pygame.Rect(1042, 650, 65, 48)
         for rect, label, color in [(serve_rect, "SERVE", GREEN), (bin_rect, "BIN", RED)]:
@@ -444,16 +476,22 @@ class KitchenRush:
                 if station.kind == "hob" and not station.food.flipped and not station.food.burning:
                     self.action("flip")
                 elif station.kind == "drink" and station.food.stage != "ready" and not station.food.burning:
-                    station.ice = clamp(station.ice + 0.25, 0, 1)
-                    station.food.stage = "filling"
-                    self.filling = True
-                    self.say("Ice added. Keep holding to fill the drink.")
+                    self.say("Use the FILL DRINK button, then release at the target level.")
                 else:
                     if self.take_from_station(station):
                         self.dragging = "held"
                 return
         if self.plate_rect.collidepoint(pos) and self.held_item:
             self.drop_on_plate(self.held_item)
+            return
+        if pygame.Rect(608, 650, 130, 48).collidepoint(pos):
+            drink = self.stations[2]
+            if drink.food and not drink.food.burning and drink.food.stage != "ready":
+                drink.food.stage = "filling"
+                self.filling = True
+                self.say("Filling... release near 80%.")
+            else:
+                self.say("Drag an empty cup to the drink filler first.")
             return
         if pygame.Rect(948, 650, 84, 48).collidepoint(pos):
             self.action("serve")
@@ -486,11 +524,25 @@ class KitchenRush:
                         else:
                             if self.plate_rect.collidepoint(event.pos):
                                 self.drop_on_plate(self.drag_item)
+                            else:
+                                for index, order in enumerate(self.orders):
+                                    ticket = pygame.Rect(295 + index * 259, 440, 245, 122)
+                                    if ticket.collidepoint(event.pos):
+                                        self.selected_order = index
+                                        self.drop_on_plate(self.drag_item)
+                                        break
                         self.dragging = None
                         self.drag_item = None
                     elif self.dragging == "held" and self.held_item:
                         if self.plate_rect.collidepoint(event.pos):
                             self.drop_on_plate(self.held_item)
+                        else:
+                            for index, order in enumerate(self.orders):
+                                ticket = pygame.Rect(295 + index * 259, 440, 245, 122)
+                                if ticket.collidepoint(event.pos):
+                                    self.selected_order = index
+                                    self.drop_on_plate(self.held_item)
+                                    break
                         self.dragging = None
                     self.filling = False
                     drink = self.stations[2]
