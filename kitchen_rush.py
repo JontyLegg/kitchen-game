@@ -469,6 +469,10 @@ class KitchenRush:
 
     def auto_route(self, item):
         """Send a clicked item to the next valid station or waiting order."""
+        if isinstance(item, dict) and item.get("burnt"):
+            self.held_item = item
+            self.bin_item()
+            return True
         kind = item["kind"] if isinstance(item, dict) else item
         if isinstance(item, str):
             if kind == "Burger":
@@ -815,7 +819,8 @@ class KitchenRush:
         for station in self.stations():
             if station.rect.collidepoint(pos) and station.food:
                 if station.food.burning:
-                    self.take_station(station)
+                    if self.take_station(station):
+                        self.auto_click_pending = True
                 elif station.kind == "hob" and not station.food.flipped:
                     if station.food.stage == "ready":
                         station.food.flipped = True
