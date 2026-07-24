@@ -1,3 +1,4 @@
+import json
 import os
 import random
 import sys
@@ -13,6 +14,8 @@ DISPLAY = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
 SCREEN = pygame.Surface((1180, 760))
 CLOCK = pygame.time.Clock()
 IMAGE_DIR = os.path.join(os.path.dirname(__file__), "images")
+SAVE_DIR = os.path.join(os.path.dirname(__file__), "saves")
+os.makedirs(SAVE_DIR, exist_ok=True)
 
 
 def image(name):
@@ -127,6 +130,10 @@ class Station:
 class KitchenRush:
     def __init__(self):
         self.running = True
+        self.paused = False
+        self.save_dialog = None
+        self.save_name = ""
+        self.save_files = []
         self.money = 0
         self.served = 0
         self.missed = 0
@@ -189,7 +196,7 @@ class KitchenRush:
                 ["Drink"],
             ]
             items = random.choice(recipes)
-        patience = 58 + len(items) * 14
+        patience = (58 + len(items) * 14) * 0.85
         self.orders.append(Order(self.next_order, items, patience, patience))
         self.next_order += 1
 
@@ -227,6 +234,9 @@ class KitchenRush:
     def fill_rect(self, station):
         return pygame.Rect(station.rect.x + 8, station.rect.bottom - 30, station.rect.width - 16, 22)
 
+    def flip_rect(self, station):
+        return pygame.Rect(station.rect.x + 34, station.rect.bottom - 30, 62, 22)
+
     def chop_rect(self):
         return pygame.Rect(self.board.rect.x + 72, self.board.rect.bottom - 32, 126, 24)
 
@@ -238,12 +248,88 @@ class KitchenRush:
             "drink": pygame.Rect(845, 700, 145, 30),
         }
 
+    def pause_rect(self):
+        return pygame.Rect(1090, 14, 78, 40)
+
+    def has_affordable_upgrade(self):
+        return (
+            (not self.chop_unlocked and self.money >= 50)
+            or (len(self.hobs) < 4 and self.money >= len(self.hobs) * 100)
+            or (len(self.fryers) < 4 and self.money >= len(self.fryers) * 100)
+            or (len(self.drinks) < 4 and self.money >= len(self.drinks) * 125)
+        )
+
+    def save_game(self, name):
+        safe = "".join(char for char in name.strip() if char.isalnum() or char in "-_ ").strip()
+        if not safe:
+            safe = "kitchen_run"
+        data = {
+            "money": self.money,
+            "served": self.served,
+            "missed": self.missed,
+            "next_order": self.next_order,
+            "selected_order": self.selected_order,
+            "chop_unlocked": self.chop_unlocked,
+            "orders": [order.__dict__ for order in self.orders],
+            "storage": self.storage,
+            "hobs": self.serialize_stations(self.hobs),
+            "fryers": self.serialize_stations(self.fryers),
+            "drinks": self.serialize_stations(self.drinks),
+            "board": self.serialize_stations([self.board])[0],
+        }
+        with open(os.path.join(SAVE_DIR, safe + ".json"), "w", encoding="utf-8") as handle:
+            json.dump(data, handle, indent=2)
+        self.save_dialog = None
+        self.save_name = ""
+        pygame.key.stop_text_input()
+        self.say(f"Saved run as {safe}.")
+
+    def serialize_stations(self, stations):
+        result = []
+        for station in stations:
+            result.append({"kind": station.kind, "index": station.index, "fill": station.fill, "food": station.food.__dict__ if station.food else None})
+        return result
+
+    def load_game(self, filename):
+        with open(os.path.join(SAVE_DIR, filename), "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+        self.money = data["money"]
+        self.served = data["served"]
+        self.missed = data["missed"]
+        self.next_order = data["next_order"]
+        self.selected_order = data["selected_order"]
+        self.chop_unlocked = data["chop_unlocked"]
+        self.orders = [Order(**order) for order in data["orders"]]
+        self.storage = data.get("storage", [None, None])
+        self.hobs = self.restore_stations(data["hobs"])
+        self.fryers = self.restore_stations(data["fryers"])
+        self.drinks = self.restore_stations(data["drinks"])
+        self.board = self.restore_stations([data["board"]])[0]
+        self.held_item = None
+        self.drag_item = None
+        self.dragging = None
+        self.filling.clear()
+        self.chopping = False
+        self.refresh_layout()
+        self.save_dialog = None
+        self.save_name = ""
+        pygame.key.stop_text_input()
+        self.say(f"Loaded {filename[:-5]}.")
+
+    def restore_stations(self, entries):
+        stations = []
+        for entry in entries:
+            station = Station(entry["kind"], entry["index"], fill=entry.get("fill", 0))
+            station.food = Food(**entry["food"]) if entry.get("food") else None
+            stations.append(station)
+        return stations
+
     def reward(self, order):
-        values = {"Burger": 15, "Chips": 13, "Drink": 10, "Lettuce": 5, "Tomato": 5}
+        values = {"Burger": 11, "Chips": 9, "Drink": 6, "Lettuce": 1, "Tomato": 1}
         return sum(values[item] for item in order.items)
 
     def delivered_reward(self, order):
-        values = {"Burger": 15, "Chips": 13, "Drink": 10, "Lettuce": 5, "Tomato": 5}
+        values = {"Burger": 11, "Chips": 9, "Drink": 6, "Lettuce": 1, "Tomato": 1}
         return sum(values[item] for item in order.plated)
 
     def buy(self, kind):
@@ -289,7 +375,8 @@ class KitchenRush:
             self.say("That item is still being prepared.")
             return False
         else:
-            item = {"kind": station.food.kind, "burnt": False}
+            cooked = station.kind != "board"
+            item = {"kind": station.food.kind, "burnt": False, "cooked": cooked}
         station.food = None
         station.fill = 0
         self.held_item = item
@@ -321,6 +408,9 @@ class KitchenRush:
             self.say("Burnt food can only go in the BIN.")
             return False
         kind = item["kind"]
+        if kind == "Chips" and not item.get("cooked", False):
+            self.say("Those chips are uncooked. Fry them before delivering them.")
+            return False
         if kind == "Bun":
             if "Burger" not in order.items:
                 self.say("That order does not need a bun.")
@@ -386,7 +476,7 @@ class KitchenRush:
 
         for station in self.drinks:
             if station in self.filling and station.food and not station.food.burning:
-                station.fill += dt * 0.175
+                station.fill += dt * 0.20125
                 station.food.stage = "filling"
                 if station.fill > 1:
                     station.food.burning = True
@@ -409,7 +499,7 @@ class KitchenRush:
                 continue
             food = station.food
             if food.stage == "raw":
-                food.progress += dt * (0.22 if not food.flipped else 0.18)
+                food.progress += dt * 0.165
                 if food.progress >= 1:
                     food.progress = 1
                     food.stage = "ready"
@@ -425,7 +515,7 @@ class KitchenRush:
                 continue
             food = station.food
             if food.stage == "raw":
-                food.progress += dt * 0.12
+                food.progress += dt * 0.138
                 if food.progress >= 1:
                     food.progress = 1
                     food.stage = "ready"
@@ -443,6 +533,11 @@ class KitchenRush:
         draw_text(SCREEN, "STARTER KITCHEN", (22, 54), SMALL, MUTED)
         draw_text(SCREEN, f"MONEY  {self.money}c", (750, 20), BIG, YELLOW)
         draw_text(SCREEN, f"SERVED {self.served}   WALKED OUT {self.missed}", (750, 52), SMALL, MUTED)
+        pygame.draw.rect(SCREEN, BLUE if self.paused else (64, 74, 92), self.pause_rect(), border_radius=6)
+        draw_text(SCREEN, "RESUME" if self.paused else "PAUSE", self.pause_rect().center, SMALL, CREAM, True)
+        if not self.paused and self.has_affordable_upgrade():
+            pygame.draw.circle(SCREEN, RED, (1078, 14), 9)
+            draw_text(SCREEN, "!", (1078, 14), SMALL, CREAM, True)
         self.draw_storage()
         self.draw_group(self.hobs, "HOBS", 20)
         self.draw_group(self.fryers, "DEEP FAT FRYERS", 310)
@@ -450,6 +545,8 @@ class KitchenRush:
         self.draw_board()
         self.draw_orders()
         self.draw_controls()
+        if self.paused:
+            self.draw_pause_menu()
         if self.drag_item or self.held_item:
             mouse = self.to_game(pygame.mouse.get_pos())
             kind = self.drag_item or self.held_item["kind"]
@@ -457,6 +554,47 @@ class KitchenRush:
         scaled = pygame.transform.smoothscale(SCREEN, DISPLAY.get_size())
         DISPLAY.blit(scaled, (0, 0))
         pygame.display.flip()
+
+    def pause_upgrade_rects(self):
+        return {
+            "chop": pygame.Rect(300, 350, 250, 38),
+            "hob": pygame.Rect(570, 350, 250, 38),
+            "fryer": pygame.Rect(300, 400, 250, 38),
+            "drink": pygame.Rect(570, 400, 250, 38),
+        }
+
+    def draw_pause_menu(self):
+        overlay = pygame.Surface(SCREEN.get_size(), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 185))
+        SCREEN.blit(overlay, (0, 0))
+        panel = pygame.Rect(220, 80, 740, 610)
+        pygame.draw.rect(SCREEN, PANEL, panel, border_radius=14)
+        pygame.draw.rect(SCREEN, BLUE, panel, 2, border_radius=14)
+        draw_text(SCREEN, "PAUSED", (panel.centerx, 112), TITLE, CREAM, True)
+        draw_text(SCREEN, "Nothing is cooking, filling, chopping, or leaving while paused.", (panel.centerx, 145), SMALL, MUTED, True)
+        buttons = [(pygame.Rect(285, 180, 180, 40), "SAVE RUN"), (pygame.Rect(480, 180, 180, 40), "OPEN SAVE"), (pygame.Rect(675, 180, 180, 40), "RESUME")]
+        for rect, label in buttons:
+            pygame.draw.rect(SCREEN, (64, 74, 92), rect, border_radius=6)
+            draw_text(SCREEN, label, rect.center, SMALL, CREAM, True)
+        draw_text(SCREEN, "UPGRADES", (panel.centerx, 300), BIG, YELLOW, True)
+        labels = {"chop": "CHOP BOARD + POTATO 50c", "hob": f"HOB SLOT {len(self.hobs) * 100}c", "fryer": f"FRYER SLOT {len(self.fryers) * 100}c", "drink": f"DRINK SLOT {len(self.drinks) * 125}c"}
+        for key, rect in self.pause_upgrade_rects().items():
+            pygame.draw.rect(SCREEN, BLUE if key == "chop" and self.chop_unlocked else (64, 74, 92), rect, border_radius=6)
+            draw_text(SCREEN, labels[key], rect.center, SMALL, CREAM, True)
+        files = sorted(name for name in os.listdir(SAVE_DIR) if name.endswith(".json"))
+        draw_text(SCREEN, "SAVES: " + (", ".join(name[:-5] for name in files) if files else "none yet"), (panel.x + 65, 480), SMALL, MUTED)
+        if self.save_dialog == "save":
+            pygame.draw.rect(SCREEN, PANEL_DARK, pygame.Rect(300, 515, 580, 95), border_radius=8)
+            draw_text(SCREEN, "SAVE NAME (type, then press ENTER):", (320, 530), SMALL, CREAM)
+            pygame.draw.rect(SCREEN, BG, pygame.Rect(320, 555, 540, 35), border_radius=5)
+            draw_text(SCREEN, self.save_name + "_", (330, 563), FONT, CREAM)
+        elif self.save_dialog == "load":
+            pygame.draw.rect(SCREEN, PANEL_DARK, pygame.Rect(300, 515, 580, 95), border_radius=8)
+            draw_text(SCREEN, "CLICK A SAVE FILE TO LOAD:", (320, 530), SMALL, CREAM)
+            for i, name in enumerate(files[:4]):
+                rect = pygame.Rect(320 + i * 130, 560, 120, 30)
+                pygame.draw.rect(SCREEN, (64, 74, 92), rect, border_radius=5)
+                draw_text(SCREEN, name[:-5][:16], rect.center, SMALL, CREAM, True)
 
     def draw_storage(self):
         draw_text(SCREEN, "STORAGE", (430, 2), SMALL, MUTED)
@@ -480,6 +618,9 @@ class KitchenRush:
                 draw_image(SCREEN, "pan", pygame.Rect(station.rect.x + 26, station.rect.y + 5, 78, 70))
                 if food:
                     draw_image(SCREEN, "cooked_burger" if food.stage == "ready" else "raw_burger", pygame.Rect(station.rect.x + 42, station.rect.y + 25, 48, 40))
+                    if food.stage == "ready" and not food.flipped:
+                        pygame.draw.rect(SCREEN, ORANGE, self.flip_rect(station), border_radius=5)
+                        draw_text(SCREEN, "FLIP", self.flip_rect(station).center, SMALL, BG, True)
             elif station.kind == "fryer":
                 if food:
                     draw_image(SCREEN, "cooked_chips" if food.stage == "ready" else "raw_chips", pygame.Rect(station.rect.x + 16, station.rect.y + 16, 98, 55))
@@ -536,7 +677,8 @@ class KitchenRush:
             draw_text(SCREEN, f"#{order.number}  {order.label()}", (rect.x + 9, rect.y + 7), SMALL, CREAM)
             delivered = (["Burger"] if "Burger" in order.plated else (["Bun"] if order.has_bun else [])) + [x for x in order.plated if x != "Burger"]
             for n, item in enumerate(delivered[:4]):
-                draw_image(SCREEN, self.food_image(item, True), pygame.Rect(rect.x + 10 + n * 38, rect.y + 28, 30, 25))
+                item_key = "burger" if item == "Burger" else self.food_image(item, True)
+                draw_image(SCREEN, item_key, pygame.Rect(rect.x + 10 + n * 38, rect.y + 28, 30, 25))
             pygame.draw.rect(SCREEN, PANEL_DARK, (rect.x + 10, rect.bottom - 13, rect.width - 20, 7), border_radius=4)
             pygame.draw.rect(SCREEN, GREEN if order.patience > 35 else RED, (rect.x + 10, rect.bottom - 13, int((rect.width - 20) * order.patience / order.max_patience), 7), border_radius=4)
 
@@ -549,16 +691,42 @@ class KitchenRush:
             draw_text(SCREEN, kind.upper(), (rect.x + 48, rect.y + 21), SMALL, CREAM)
         pygame.draw.rect(SCREEN, RED, pygame.Rect(1060, 665, 80, 58), border_radius=7)
         draw_text(SCREEN, "BIN", (1100, 694), BIG, CREAM, True)
-        buttons = self.all_upgrade_rects()
-        labels = {"chop": f"CHOP BOARD 50c", "hob": f"HOB +1 {len(self.hobs) * 100}c", "fryer": f"FRYER +1 {len(self.fryers) * 100}c", "drink": f"DRINK +1 {len(self.drinks) * 125}c"}
-        for key, rect in buttons.items():
-            pygame.draw.rect(SCREEN, BLUE if (key == "chop" and self.chop_unlocked) else (64, 74, 92), rect, border_radius=5)
-            draw_text(SCREEN, labels[key], rect.center, SMALL, CREAM, True)
+        draw_text(SCREEN, "Press P or click PAUSE to buy upgrades and save/load a run.", (692, 675), SMALL, MUTED)
+        draw_text(SCREEN, "P = pause", (692, 704), SMALL, MUTED)
 
     def to_game(self, pos):
         return int(pos[0] * 1180 / DISPLAY.get_width()), int(pos[1] * 760 / DISPLAY.get_height())
 
     def click(self, pos):
+        if self.save_dialog == "load":
+            files = sorted(name for name in os.listdir(SAVE_DIR) if name.endswith(".json"))
+            for i, filename in enumerate(files[:4]):
+                if pygame.Rect(320 + i * 130, 560, 120, 30).collidepoint(pos):
+                    self.load_game(filename)
+                    return
+            return
+        if self.save_dialog == "save":
+            return
+        if self.pause_rect().collidepoint(pos):
+            self.paused = not self.paused
+            return
+        if self.paused:
+            if pygame.Rect(285, 180, 180, 40).collidepoint(pos):
+                self.save_dialog = "save"
+                self.save_name = ""
+                pygame.key.start_text_input()
+                return
+            if pygame.Rect(480, 180, 180, 40).collidepoint(pos):
+                self.save_dialog = "load"
+                return
+            if pygame.Rect(675, 180, 180, 40).collidepoint(pos):
+                self.paused = False
+                return
+            for key, rect in self.pause_upgrade_rects().items():
+                if rect.collidepoint(pos):
+                    self.buy(key)
+                    return
+            return
         if self.held_item:
             self.dragging = "held"
         for i, rect in enumerate(self.storage_rects()):
@@ -577,10 +745,6 @@ class KitchenRush:
             if rect.collidepoint(pos):
                 self.drag_item = kind
                 self.dragging = "source"
-                return
-        for key, rect in self.all_upgrade_rects().items():
-            if rect.collidepoint(pos):
-                self.buy(key)
                 return
         if pygame.Rect(1060, 665, 80, 58).collidepoint(pos):
             self.bin_item()
@@ -651,11 +815,11 @@ class KitchenRush:
         for station in self.drinks:
             if station.food and station.food.stage == "filling" and not station.food.burning:
                 if 0.9 <= station.fill <= 1:
-                    station.fill = 1
                     station.food.stage = "ready"
                     self.say("Drink filled and ready to drag.")
-                elif station.fill < 0.9:
-                    self.say("That drink needs at least 90% fill.")
+                else:
+                    station.food.burning = True
+                    self.say("That drink is outside the 90%–100% range. Drag it into the BIN.")
 
     def run(self):
         while self.running:
@@ -663,18 +827,36 @@ class KitchenRush:
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     self.running = False
-                elif event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
-                    self.running = False
-                elif event.type == pygame.KEYDOWN and event.key == pygame.K_RIGHT:
-                    self.selected_order = min(len(self.orders) - 1, self.selected_order + 1)
-                elif event.type == pygame.KEYDOWN and event.key == pygame.K_LEFT:
-                    self.selected_order = max(0, self.selected_order - 1)
+                elif event.type == pygame.TEXTINPUT and self.save_dialog == "save":
+                    self.save_name += event.text
+                elif event.type == pygame.KEYDOWN:
+                    if self.save_dialog == "save":
+                        if event.key == pygame.K_RETURN:
+                            self.save_game(self.save_name)
+                        elif event.key == pygame.K_BACKSPACE:
+                            self.save_name = self.save_name[:-1]
+                        elif event.key == pygame.K_ESCAPE:
+                            self.save_dialog = None
+                            self.save_name = ""
+                            pygame.key.stop_text_input()
+                        continue
+                    if event.key == pygame.K_p:
+                        self.paused = not self.paused
+                        continue
+                    if event.key == pygame.K_ESCAPE:
+                        self.running = False
+                    elif not self.paused and event.key == pygame.K_RIGHT:
+                        self.selected_order = min(len(self.orders) - 1, self.selected_order + 1)
+                    elif not self.paused and event.key == pygame.K_LEFT:
+                        self.selected_order = max(0, self.selected_order - 1)
                 elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                     self.click(self.to_game(event.pos))
                 elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
-                    self.release(self.to_game(event.pos))
-            self.update_progress(dt)
-            self.update(dt)
+                    if not self.paused:
+                        self.release(self.to_game(event.pos))
+            if not self.paused:
+                self.update_progress(dt)
+                self.update(dt)
             self.draw()
         pygame.quit()
         sys.exit()
