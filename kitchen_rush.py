@@ -677,12 +677,13 @@ class KitchenRush:
                 self.save_game(self.active_save[:-5])
                 self.say("Autosaved.", 1)
         self.hard_order_timer += dt
-        if self.hard_order_timer >= self.next_hard_order:
+        extra_hard_active = any(order.extra_hard for order in self.orders)
+        if self.hard_order_timer >= self.next_hard_order and not extra_hard_active:
             self.hard_order_timer = 0
             self.next_hard_order = random.uniform(270, 330)
             self.add_extra_hard_order()
         self.spawn_timer += dt
-        if self.spawn_timer > 16 and len(self.orders) < 4:
+        if not extra_hard_active and self.spawn_timer > 16 and len(self.orders) < 4:
             self.spawn_timer = 0
             self.add_order()
         for order in self.orders[:]:
