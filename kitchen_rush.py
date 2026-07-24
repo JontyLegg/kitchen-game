@@ -209,6 +209,9 @@ class KitchenRush:
         if not order:
             return
         if item == "Bun":
+            if "Burger" not in order.items:
+                self.say("This order does not need a bun.")
+                return
             if order.has_bun:
                 self.say("This plate already has a bun.")
             else:
@@ -216,6 +219,9 @@ class KitchenRush:
                 self.say("Bun added. Now drag the burger onto this order.")
         elif isinstance(item, dict):
             kind = item["kind"]
+            if kind not in order.items:
+                self.say(f"This order does not need {kind.lower()}.")
+                return
             if kind == "Burger" and not order.has_bun:
                 self.say("Every burger needs a bun first — drag a bun onto this order.")
                 return
@@ -252,15 +258,16 @@ class KitchenRush:
             station = self.stations[0]
             if not station.food:
                 self.say("Put a patty on the hob first.")
-            elif station.food.stage == "ready":
-                self.say("That patty is ready — move it to the pass.")
+            elif station.food.stage != "ready":
+                self.say("Wait until the patty is ready before flipping it.")
             elif station.food.flipped:
-                self.say("You already flipped this patty.")
+                self.say("That burger is fully cooked — take it off before it burns.")
             else:
                 station.food.flipped = True
                 station.food.stage = "raw"
                 station.food.progress = 0
-                self.say("Patty flipped. Keep an eye on the bar!")
+                station.food.burn_flash = 0
+                self.say("Patty flipped. The second side is cooking now!")
         elif action == "start_chips":
             station = self.stations[1]
             if station.food:
@@ -329,21 +336,14 @@ class KitchenRush:
             if hob.food.stage == "raw":
                 speed = 0.22 if not hob.food.flipped else 0.18
                 hob.food.progress += dt * speed
-                if not hob.food.flipped and hob.food.progress >= 1:
-                    hob.food.progress = 1
-                    hob.food.stage = "warning"
-                    hob.food.burn_flash = 3
-                    self.say("FLIP NOW! The patty is starting to burn!", 3)
-                elif hob.food.flipped and hob.food.progress >= 1:
+                if hob.food.progress >= 1:
                     hob.food.progress = 1
                     hob.food.stage = "ready"
                     hob.food.burn_flash = 3
-                    self.say("Burger cooked! Take it off before it burns.", 3)
-            elif hob.food.stage == "warning":
-                hob.food.burn_flash -= dt
-                if hob.food.burn_flash <= 0:
-                    hob.food.burning = True
-                    self.say("Patty burned! Bin it and start again.")
+                    if hob.food.flipped:
+                        self.say("Burger cooked! Take it off before it burns.", 3)
+                    else:
+                        self.say("Patty ready — flip it now!", 3)
             elif hob.food.stage == "ready":
                 hob.food.burn_flash -= dt
                 if hob.food.burn_flash <= 0:
@@ -352,7 +352,7 @@ class KitchenRush:
 
         fryer = self.stations[1]
         if fryer.food and not fryer.food.burning:
-            fryer.food.progress += dt * 0.18
+            fryer.food.progress += dt * 0.12
             if fryer.food.progress >= 1 and fryer.food.stage == "raw":
                 fryer.food.progress = 1
                 fryer.food.stage = "ready"
@@ -432,7 +432,8 @@ class KitchenRush:
             pygame.draw.rect(SCREEN, outline, rect, 4 if selected else 3, border_radius=10)
             draw_text(SCREEN, f"#{order.number}", (x + 14, 451), BIG, ORANGE)
             draw_text(SCREEN, order.label(), (x + 55, 454), FONT, CREAM)
-            delivered = (["Bun"] if order.has_bun else []) + order.plated
+            delivered = (["Burger"] if "Burger" in order.plated else (["Bun"] if order.has_bun else []))
+            delivered += [item for item in order.plated if item != "Burger"]
             for item_index, item in enumerate(delivered[:4]):
                 item_key = {"Bun": "bun", "Burger": "burger", "Chips": "cooked_chips", "Drink": "filled_drink"}[item]
                 draw_image(SCREEN, item_key, pygame.Rect(x + 14 + item_index * 42, 476, 34, 30))
